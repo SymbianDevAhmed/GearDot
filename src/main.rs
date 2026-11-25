@@ -8,12 +8,18 @@ mod taskbar;
 mod icon;
 #[cfg(windows)]
 mod details;
+#[cfg(windows)]
+mod runtime;
 
 #[cfg(windows)]
 fn main() {
-    let result = if std::env::args().any(|arg| arg == "--details") {
-        details::show()
-    } else { app::TrayApp::run() };
+    let settings = std::env::args().any(|arg| arg == "--settings");
+    let window = settings || std::env::args().any(|arg| arg == "--details");
+    let result: Result<(), Box<dyn std::error::Error>> = (|| {
+        // Separate mutexes permit one monitor and one details/settings window.
+        let Some(_guard) = runtime::InstanceGuard::acquire(window)? else { return Ok(()); };
+        if window { details::show(settings) } else { app::TrayApp::run() }
+    })();
     if let Err(error) = result {
         eprintln!("{error}");
         // Release builds have no console; preserve a readable local startup log.
