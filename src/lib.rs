@@ -7,3 +7,5 @@ pub mod receiver;
 pub mod history;
 
 pub mod mouse;
+
+pub mod preferences;
