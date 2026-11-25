@@ -29,18 +29,22 @@ Both readings appear side by side next to the Windows notification area, using a
 
 ## ✨ Key Features
 
+> **Development update:** the options below are implemented on main for the next release. The latest downloadable stable build remains v1.0.0 until the owner approves publication.
+
 - 🎧 **Headset Battery** — Read Logitech G435 voltage through its LIGHTSPEED receiver and display an approximate percentage.
 - 🖱️ **Mouse Battery** — Query the VXE MAD R receiver or USB cable for the reported percentage, voltage and charging status.
 - 📊 **Dual Taskbar Widget** — Show the headset and mouse symbols with individual battery percentages, without a coloured background.
-- 🎨 **Theme Awareness** — Adapt the text and icon colours to the Windows light or dark taskbar theme and scale with DPI.
+- 🎨 **Appearance** — Choose System, Mint, Blue or Violet widget colours, resize the widget from 80–130%, and select System/Light/Dark for the details window. Status colours retain their meaning and the taskbar adapts to Windows DPI.
 - 🔄 **Independent Automatic Refresh** — Poll each device independently, normally every 60 seconds (adjustable from 15–300 seconds); retry unavailable devices and refresh charging devices every 15 seconds. Manual refresh remains available.
 - 🔌 **Charging & Full Status** — MAD R shows a green percentage with a charging symbol, then Full at a device-reported 100%. A completion alert can be enabled. G435 is voltage-based, so charging cannot be confirmed from the receiver.
 - 🔴 **Low Battery Notification** — Configurable threshold (5–50%), Windows notification-area alerts, and recovery hysteresis to avoid repeating alerts on every poll.
 - ⚙️ **Settings Panel** — Configure startup, polling interval, low-battery and charge-complete alerts; preferences are applied and saved locally.
 - 🟢 **Start with Windows** — Optional current-user sign-in startup, disabled by default.
 - 🧩 **Single Instance** — One monitor and one details/settings window per Windows session.
+- 🎛️ **Device Management** — Independently show or hide G435 and MAD R on the taskbar; hidden devices still collect history and alerts.
+- ✨ **Charging Animation** — Optional subtle green pulse while a supported device charges; Full remains steady.
 - 💤 **Sleep Handling** — Briefly retain the mouse's last reading, marked with a tilde and muted colour, when it stops responding; show an unavailable value after the grace period.
-- 📈 **Battery History** — View each device's last 12 hours of recorded samples and a conservative discharge-based time estimate when sufficient data is available.
+- 📈 **Battery History** — Choose a 3/6/12/24/48-hour chart, view min/max/net change, and obtain a regression-based remaining-time estimate only when sufficient uninterrupted discharge data is available.
 - 🛡️ **Privacy** — Keep readings locally; no telemetry, external service, or firmware changes.
 - 🎨 **Original App Icon** — A custom headset, mouse and charge emblem, embedded in the Windows executable and details window.
 - 📦 **Portable EXE** — Run without installing Rust, .NET or G HUB.
@@ -158,7 +162,7 @@ Right-click the taskbar widget and select **Settings**, or open the details card
 
 The MAD R widget indicates charging with a green percentage and charging symbol, then displays **Full** when the mouse reports 100%. A single completion alert is emitted after a known charging session; Windows notification settings may suppress the notification. G435 still only reports battery voltage: an estimated 100% is explicitly labelled as an estimate in the details card, not verified charge completion.
 
-Both devices reconnect automatically, with independent 15-second retries while unavailable. Old readings are marked stale and do not trigger alerts. The monitor prevents duplicate monitor instances in the same session.
+Both devices reconnect automatically, with independent 15-second retries while unavailable. Device visibility, widget size and colour, charging animation, history period and window theme are adjustable from Settings. Old readings are marked stale and do not trigger alerts. The monitor prevents duplicate monitor instances in the same session.
 
 ### Build from Source
 
@@ -188,14 +192,15 @@ The tests check:
 - Voltage limits and invalid or unrelated packets.
 - MAD R request checksum, device-reported percentage, charging flag and rejection of asleep or unrelated reports.
 - Remaining-time calculations using sustained discharge samples.
-- Settings defaults, bounds and JSON round-trip.
+- Settings defaults, migration, appearance limits and JSON round-trip.
+- History statistics and conservative regression-based discharge forecast.
 - Low-battery alert hysteresis, disabled alerts, confirmed charging completion, disconnect handling and estimated-vs-reported full status.
 
 ### Hardware Validation
 
 The original G435 diagnostic was performed on the actual `046D:0ADF` receiver. The v0.2.0 Windows release passed four automated tests, and the headset widget was confirmed by the user.
 
-MAD R support is based on the documented battery-report format; the owner reported that v0.3.0 worked on their setup. The v1.1.0 release retains the same battery protocols and adds settings, independent reconnection, native alerts and charging/full status. Automated tests validate the logic; Windows notification delivery and startup behaviour need real-device confirmation. Run `diagnostic.exe` to compare its reported percentage against ATK Gear. A missing response is not treated as a zero-percent battery.
+MAD R support is based on the documented battery-report format; the owner reported that v0.3.0 worked on their setup. The next version retains the same battery protocols and adds settings, independent reconnection, native alerts and charging/full status. Automated tests validate the logic; actual Windows notification delivery, startup and widget layout need real-device confirmation. Run `diagnostic.exe` to compare its reported percentage against ATK Gear. A missing response is not treated as a zero-percent battery.
 
 ---
 
@@ -206,7 +211,7 @@ MAD R support is based on the documented battery-report format; the owner report
 - The G435 percentage is an estimate from cell voltage and can vary with charging and load.
 - MAD R reports its own percentage and charging flag; this is not calculated from the voltage curve.
 - Data is saved locally in `%LOCALAPPDATA%\G435Battery\history.csv` and `mad-r-history.csv`, with up to 48 hours retained. Old G435 history is preserved.
-- The dashboard charts the previous 12 hours; remaining time is shown only when the recent readings support a sustained falling trend. Estimated runtime is not guaranteed.
+- The dashboard charts 3, 6, 12, 24 or 48 hours; remaining time uses a fitted linear discharge trend only when recent samples support a sustained decline. Estimated runtime is not guaranteed.
 
 ---
 
