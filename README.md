@@ -242,8 +242,11 @@ This is an independent Rust implementation, not a clone or repackaging of anothe
 
 ---
 
+> [!NOTE]
+> Unofficial project; not affiliated with Logitech, VXE or ATK.
+
+---
+
 ## 👤 Developer
 
 **Ahmed Gaber** — [SymbianDevAhmed](https://github.com/SymbianDevAhmed)
-
-Unofficial project; not affiliated with Logitech, VXE or ATK.
