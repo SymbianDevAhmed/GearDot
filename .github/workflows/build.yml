@@ -42,6 +42,82 @@ jobs:
       - name: Run protocol and domain tests
         run: cargo test --all-targets
       - name: Build portable executables
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        run: cargo build --release --bins
+      - uses: actions/upload-artifact@v6
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        with:
+          name: WirelessBatteryMonitor-windows-x64
+          path: |
+            target/release/wireless-battery-monitor.exe
+            target/release/diagnostic.exe
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_release
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: WirelessBatteryMonitor-windows-x64
+          path: dist
+      - name: Publish tested stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.windows.outputs.version }}
+        run: |
+          cd dist
+          zip WirelessBatteryMonitor-windows-x64.zip wireless-battery-monitor.exe diagnostic.exe
+          sha256sum wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-windows-x64.zip > SHA256SUMS.txt
+          gh release create "v$VERSION" wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-windows-x64.zip SHA256SUMS.txt --target "$GITHUB_SHA" --title "Wireless Battery Monitor v$VERSION" --latest --notes "Windows x64 release. Persistent settings, optional sign-in startup, independent reconnection, single-instance handling, native low-battery and charge-complete notifications, and MAD R charging/full status. Automated Rust tests passed. G435 charging state remains unavailable; its percentage is a voltage-based estimate."
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'assets/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish stable release after tests pass
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Select Rust stable
+        run: rustup default stable
+      - name: Read package version
+        id: version
+        run: |
+          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          "version=$($metadata.packages[0].version)" >> $env:GITHUB_OUTPUT
+      - name: Run protocol and domain tests
+        run: cargo test --all-targets
+      - name: Build portable executables
         run: cargo build --release --bins
       - uses: actions/upload-artifact@v6
         with:
