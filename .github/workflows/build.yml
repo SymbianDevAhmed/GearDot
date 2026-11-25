@@ -7,11 +7,14 @@ on:
       - 'src/**'
       - 'tests/**'
       - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'assets/**'
       - '.github/workflows/build.yml'
   workflow_dispatch:
     inputs:
-      publish_preview:
-        description: Publish preview to Releases after tests pass
+      publish_release:
+        description: Publish stable release after tests pass
         type: boolean
         default: false
 
@@ -19,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -28,7 +31,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Select Rust stable
         run: rustup default stable
       - name: Read package version
@@ -40,7 +43,7 @@ jobs:
         run: cargo test --all-targets
       - name: Build portable executables
         run: cargo build --release --bins
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: WirelessBatteryMonitor-windows-x64
           path: |
@@ -49,17 +52,17 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_preview
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_release
     needs: windows
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: WirelessBatteryMonitor-windows-x64
           path: dist
-      - name: Publish tested preview
+      - name: Publish tested stable release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -67,4 +70,5 @@ jobs:
         run: |
           cd dist
           zip WirelessBatteryMonitor-windows-x64.zip wireless-battery-monitor.exe diagnostic.exe
-          gh release create "v$VERSION" wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-windows-x64.zip --target "$GITHUB_SHA" --title "Wireless Battery Monitor v$VERSION" --prerelease --notes "Native dual-device battery widget for Logitech G435 and VXE MAD R. MAD R support is a hardware-validation preview. Automated tests passed."
+          sha256sum wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-windows-x64.zip > SHA256SUMS.txt
+          gh release create "v$VERSION" wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-windows-x64.zip SHA256SUMS.txt --target "$GITHUB_SHA" --title "Wireless Battery Monitor v$VERSION" --latest --notes "Stable Windows x64 release. Original application emblem, native dual-device widget, independent battery history, and improved CI concurrency. Automated Rust tests passed. G435 percentage is a voltage-based estimate."
