@@ -1,11 +1,11 @@
 [package]
-name = "g435-battery"
-version = "0.2.0"
+name = "wireless-battery-monitor"
+version = "0.3.0"
 edition = "2021"
-description = "Local Windows battery monitor for Logitech G435 LIGHTSPEED (0ADF)"
+description = "Local Windows battery monitor for Logitech G435 and VXE MAD R"
 
 [lib]
-name = "g435_battery"
+name = "wireless_battery_monitor"
 path = "src/lib.rs"
 
 [target.'cfg(windows)'.dependencies]
