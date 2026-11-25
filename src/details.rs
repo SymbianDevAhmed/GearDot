@@ -7,6 +7,11 @@ pub fn show() -> Result<(), Box<dyn std::error::Error>> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([350.0f32, 375.0])
+            .with_icon(egui::IconData {
+                rgba: include_bytes!(concat!(env!("OUT_DIR"), "/app-icon.rgba")).to_vec(),
+                width: 64,
+                height: 64,
+            })
             .with_resizable(false)
             .with_always_on_top(),
         ..Default::default()
