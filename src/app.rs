@@ -94,7 +94,7 @@ impl TrayApp {
             .with_icon(BatteryIcon::render(None)?)
             .build()?);
         let proxy = self.proxy.clone();
-        self.widget = TaskbarWidget::new(move |event| { let _ = proxy.send_event(Event::Widget(event)); });
+        self.widget = TaskbarWidget::new(self.settings.widget_options(), move |event| { let _ = proxy.send_event(Event::Widget(event)); });
         self.notifier = Some(Notifier::new());
         Ok(())
     }
@@ -211,9 +211,9 @@ impl TrayApp {
             self.status[kind.index()].set_text(&message);
             messages.push(message);
         }
-        if let Some(widget) = self.widget.as_mut() { widget.set_readings(readings); }
+        if let Some(widget) = self.widget.as_mut() { widget.update(readings, self.settings.widget_options()); }
         if let Some(tray) = &self.tray {
-            if let Ok(icon) = BatteryIcon::render(readings[0].level.or(readings[1].level)) { let _ = tray.set_icon(Some(icon)); }
+            if let Ok(icon) = BatteryIcon::render(readings.iter().zip(self.settings.widget_options().visible).find_map(|(r, visible)| if visible { r.level } else { None }).or(readings[0].level).or(readings[1].level)) { let _ = tray.set_icon(Some(icon)); }
             let tooltip: String = messages.join("\n").chars().take(120).collect();
             let _ = tray.set_tooltip(Some(&tooltip));
         }
