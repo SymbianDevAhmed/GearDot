@@ -33,9 +33,12 @@ Both readings appear side by side next to the Windows notification area, using a
 - 🖱️ **Mouse Battery** — Query the VXE MAD R receiver or USB cable for the reported percentage, voltage and charging status.
 - 📊 **Dual Taskbar Widget** — Show the headset and mouse symbols with individual battery percentages, without a coloured background.
 - 🎨 **Theme Awareness** — Adapt the text and icon colours to the Windows light or dark taskbar theme and scale with DPI.
-- 🔄 **Automatic Refresh** — Poll both devices every 60 seconds, with a manual refresh option.
-- 🔌 **Charging Indicator** — Display the MAD R reading in green while charging; G435 charging status is not available.
-- 🔴 **Low Battery** — Highlight individual devices below 20%; no notification balloon in this version.
+- 🔄 **Independent Automatic Refresh** — Poll each device independently, normally every 60 seconds (adjustable from 15–300 seconds); retry unavailable devices and refresh charging devices every 15 seconds. Manual refresh remains available.
+- 🔌 **Charging & Full Status** — MAD R shows a green percentage with a charging symbol, then Full at a device-reported 100%. A completion alert can be enabled. G435 is voltage-based, so charging cannot be confirmed from the receiver.
+- 🔴 **Low Battery Notification** — Configurable threshold (5–50%), Windows notification-area alerts, and recovery hysteresis to avoid repeating alerts on every poll.
+- ⚙️ **Settings Panel** — Configure startup, polling interval, low-battery and charge-complete alerts; preferences are applied and saved locally.
+- 🟢 **Start with Windows** — Optional current-user sign-in startup, disabled by default.
+- 🧩 **Single Instance** — One monitor and one details/settings window per Windows session.
 - 💤 **Sleep Handling** — Briefly retain the mouse's last reading, marked with a tilde and muted colour, when it stops responding; show an unavailable value after the grace period.
 - 📈 **Battery History** — View each device's last 12 hours of recorded samples and a conservative discharge-based time estimate when sufficient data is available.
 - 🛡️ **Privacy** — Keep readings locally; no telemetry, external service, or firmware changes.
@@ -103,8 +106,10 @@ Wireless-Battery-Monitor/
 │   ├── lib.rs
 │   ├── main.rs
 │   ├── mouse.rs
+│   ├── preferences.rs
 │   ├── protocol.rs
 │   ├── receiver.rs
+│   ├── runtime.rs
 │   ├── taskbar.rs
 │   └── bin/
 │       └── diagnostic.rs
@@ -127,7 +132,9 @@ Wireless-Battery-Monitor/
 | `mouse.rs` | MAD R battery protocol, hardware adapter and protocol tests |
 | `history.rs` | Local per-device storage and discharge trend estimates |
 | `taskbar.rs` | Native transparent two-device display |
-| `app.rs` | Application lifecycle, polling and actions |
+| `app.rs` | Application lifecycle, independent polling and actions |
+| `preferences.rs` | Validated settings, live device state and notification policy |
+| `runtime.rs` | Windows startup preference, single-instance guard and native notifications |
 | `details.rs` | Device selector, battery chart and details card |
 | `icon.rs` | System tray fallback icon |
 | `diagnostic.rs` | One-shot console reading for both supported devices |
@@ -144,6 +151,14 @@ Wireless-Battery-Monitor/
 4. Run the executable. The percentages appear on the taskbar when the devices respond.
 
 Click the widget to open battery details. Right-click to refresh or exit. When the taskbar layout cannot be located, the standard notification-area icon remains available with both device statuses. The fallback may appear under the Windows hidden-icons arrow.
+
+### Settings and Charging
+
+Right-click the taskbar widget and select **Settings**, or open the details card and choose the Settings tab. Save changes to apply them within two seconds. Start with Windows is opt-in; keep the EXE in a permanent location and re-enable the setting after moving it. Settings are written to `%LOCALAPPDATA%\G435Battery\settings.json`.
+
+The MAD R widget indicates charging with a green percentage and charging symbol, then displays **Full** when the mouse reports 100%. A single completion alert is emitted after a known charging session; Windows notification settings may suppress the notification. G435 still only reports battery voltage: an estimated 100% is explicitly labelled as an estimate in the details card, not verified charge completion.
+
+Both devices reconnect automatically, with independent 15-second retries while unavailable. Old readings are marked stale and do not trigger alerts. The monitor prevents duplicate monitor instances in the same session.
 
 ### Build from Source
 
@@ -173,16 +188,20 @@ The tests check:
 - Voltage limits and invalid or unrelated packets.
 - MAD R request checksum, device-reported percentage, charging flag and rejection of asleep or unrelated reports.
 - Remaining-time calculations using sustained discharge samples.
+- Settings defaults, bounds and JSON round-trip.
+- Low-battery alert hysteresis, disabled alerts, confirmed charging completion, disconnect handling and estimated-vs-reported full status.
 
 ### Hardware Validation
 
 The original G435 diagnostic was performed on the actual `046D:0ADF` receiver. The v0.2.0 Windows release passed four automated tests, and the headset widget was confirmed by the user.
 
-MAD R support is based on the documented battery-report format; the owner reported that v0.3.0 worked on their setup. The v1.0.0 release retains the same battery protocols and adds application branding and CI improvements. Run `diagnostic.exe` to compare its reported percentage against ATK Gear. A missing response is not treated as a zero-percent battery.
+MAD R support is based on the documented battery-report format; the owner reported that v0.3.0 worked on their setup. The v1.1.0 release retains the same battery protocols and adds settings, independent reconnection, native alerts and charging/full status. Automated tests validate the logic; Windows notification delivery and startup behaviour need real-device confirmation. Run `diagnostic.exe` to compare its reported percentage against ATK Gear. A missing response is not treated as a zero-percent battery.
 
 ---
 
 ## 📈 Battery Interpretation & Data
+
+- Settings and the most recent live reading are stored locally. Start with Windows uses the standard current-user startup setting only when enabled by the user.
 
 - The G435 percentage is an estimate from cell voltage and can vary with charging and load.
 - MAD R reports its own percentage and charging flag; this is not calculated from the voltage curve.
@@ -203,6 +222,8 @@ MAD R support is based on the documented battery-report format; the owner report
 ---
 
 ## 🔗 Technical References
+
+- [Windows notification area API](https://learn.microsoft.com/windows/win32/api/shellapi/ns-shellapi-notifyicondataw) and [Windows sign-in startup](https://learn.microsoft.com/windows/win32/setupapi/run-and-runonce-registry-keys).
 
 - [Windows resource embedding](https://docs.rs/winresource/) and [SVG rendering](https://docs.rs/resvg/) — the original vector icon is rendered during the build.
 
