@@ -1,0 +1,21 @@
+[package]
+name = "g435-battery"
+version = "0.1.0"
+edition = "2021"
+description = "Local Windows battery monitor for Logitech G435 LIGHTSPEED (0ADF)"
+
+[lib]
+name = "g435_battery"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+hidapi = { version = "2.6", features = ["windows-native"] }
+tray-icon = "0.19"
+winit = "0.30"
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
