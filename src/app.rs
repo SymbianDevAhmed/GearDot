@@ -1,8 +1,9 @@
 use crate::icon::BatteryIcon;
-use crate::taskbar::{TaskbarWidget, WidgetEvent};
-use g435_battery::battery::{BatteryError, BatteryReading, BatterySource};
-use g435_battery::receiver::G435Receiver;
-use g435_battery::history::BatteryHistory;
+use crate::taskbar::{TaskbarWidget, WidgetEvent, WidgetReading};
+use wireless_battery_monitor::battery::{BatteryError, BatteryReading, BatterySource, DeviceKind};
+use wireless_battery_monitor::receiver::G435Receiver;
+use wireless_battery_monitor::mouse::MadRReceiver;
+use wireless_battery_monitor::history::BatteryHistory;
 use std::time::{Duration, Instant};
 use tray_icon::{menu::{Menu, MenuEvent, MenuItem}, TrayIcon, TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
 use winit::{
@@ -18,7 +19,7 @@ enum Event {
     Menu(MenuEvent),
     Tray(TrayIconEvent),
     Widget(WidgetEvent),
-    Reading(Result<BatteryReading, BatteryError>),
+    Reading([Result<BatteryReading, BatteryError>; 2]),
 }
 
 /// Presentation layer owns all tray resources; HID requests run on background threads.
@@ -26,9 +27,10 @@ pub struct TrayApp {
     tray: Option<TrayIcon>,
     widget: Option<TaskbarWidget>,
     status: MenuItem,
+    mouse_status: MenuItem,
     refresh: MenuItem,
     details: MenuItem,
-    history: BatteryHistory,
+    histories: [BatteryHistory; 2],
     details_process: Option<std::process::Child>,
     quit: MenuItem,
     proxy: EventLoopProxy<Event>,
@@ -54,9 +56,10 @@ impl TrayApp {
             tray: None,
             widget: None,
             status: MenuItem::new("Checking G435...", false, None),
+            mouse_status: MenuItem::new("Checking MAD R...", false, None),
             refresh: MenuItem::new("Refresh now", true, None),
             details: MenuItem::new("Battery details", true, None),
-            history: BatteryHistory::load(),
+            histories: DeviceKind::ALL.map(BatteryHistory::load),
             details_process: None,
             quit: MenuItem::new("Exit", true, None),
             proxy,
@@ -75,12 +78,13 @@ impl TrayApp {
     fn create_tray(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let menu = Menu::new();
         menu.append(&self.status)?;
+        menu.append(&self.mouse_status)?;
         menu.append(&self.details)?;
         menu.append(&self.refresh)?;
         menu.append(&self.quit)?;
         self.tray = Some(TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("Logitech G435: checking...")
+            .with_tooltip("Wireless Battery Monitor: checking...")
             .with_menu_on_left_click(false)
             .with_icon(BatteryIcon::render(None)?)
             .build()?);
@@ -105,32 +109,58 @@ impl TrayApp {
         self.next_refresh = Instant::now() + REFRESH_INTERVAL;
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
-            let mut source = G435Receiver::new();
-            let _ = proxy.send_event(Event::Reading(source.read_battery()));
+            // Same BatterySource abstraction, two independent hardware adapters.
+            let mut headset = G435Receiver::new();
+            let mut mouse = MadRReceiver;
+            let _ = proxy.send_event(Event::Reading([headset.read_battery(), mouse.read_battery()]));
         });
     }
 
-    fn apply_reading(&mut self, result: Result<BatteryReading, BatteryError>) {
+    fn apply_reading(&mut self, results: [Result<BatteryReading, BatteryError>; 2]) {
         self.pending = false;
         self.refresh.set_enabled(true);
-        let (level, message) = match result {
-            Ok(reading) => {
-                let _ = self.history.record(reading);
-                (Some(reading.percentage()),
-                format!("G435: ~{}% ({} mV){}", reading.percentage(), reading.millivolts(),
-                    if reading.is_low() { " - low battery" } else { "" }))
-            },
-            Err(error) => (None, format!("G435: {error}")),
-        };
-        self.status.set_text(&message);
-        if let Some(widget) = self.widget.as_mut() { widget.set_level(level); }
+        let mut readings = [WidgetReading::default(); 2];
+        let mut messages = Vec::new();
+        for (kind, result) in DeviceKind::ALL.into_iter().zip(results) {
+            let index = kind.index();
+            let history = &mut self.histories[index];
+            let message = match result {
+                Ok(reading) => {
+                    let _ = history.record(reading);
+                    readings[index] = WidgetReading { level: Some(reading.percentage()), charging: reading.charging() == Some(true), stale: false };
+                    format!("{}: {}{}% ({} mV){}", kind.name(), if reading.estimated() { "~" } else { "" },
+                        reading.percentage(), reading.millivolts(), if reading.charging() == Some(true) { " • charging" } else { "" })
+                },
+                Err(error) => {
+                    // A sleeping mouse may not answer. Preserve its last sample briefly,
+                    // but never present an unplugged receiver or old sample as current.
+                    if kind == DeviceKind::Mouse && !matches!(error, BatteryError::ReceiverNotFound) {
+                        if let Some(previous) = history.latest().filter(|s| BatteryHistory::now().saturating_sub(s.at) <= 1800) {
+                            readings[index] = WidgetReading { level: Some(previous.percent), charging: false, stale: true };
+                        }
+                    }
+                    if let Some(level) = readings[index].level {
+                        format!("{}: ~{}% (last reading; {})", kind.name(), level, error)
+                    } else {
+                        format!("{}: {}", kind.name(), error)
+                    }
+                },
+            };
+            messages.push(message);
+        }
+        self.status.set_text(&messages[0]);
+        self.mouse_status.set_text(&messages[1]);
+        if let Some(widget) = self.widget.as_mut() { widget.set_readings(readings); }
         if let Some(tray) = &self.tray {
-            if let Ok(icon) = BatteryIcon::render(level) {
+            if let Ok(icon) = BatteryIcon::render(readings[0].level.or(readings[1].level)) {
                 let _ = tray.set_icon(Some(icon));
             }
-            let _ = tray.set_tooltip(Some(&message));
+            let tooltip = messages.join("\n");
+            let tooltip: String = tooltip.chars().take(120).collect();
+            let _ = tray.set_tooltip(Some(&tooltip));
         }
     }
+
 }
 
 impl ApplicationHandler<Event> for TrayApp {
