@@ -49,7 +49,7 @@ impl BatteryHistory {
     pub fn record(&mut self, reading: BatteryReading) -> io::Result<()> {
         let now = Self::now();
         self.samples.retain(|s| s.at <= now && now - s.at <= RETENTION);
-        if self.samples.last().is_some_and(|s| now.saturating_sub(s.at) < 60) {
+        if self.samples.last().is_some_and(|s| now.saturating_sub(s.at) < 60 && s.charging == reading.charging()) {
             return Ok(());
         }
         self.samples.push(Sample { at: now, percent: reading.percentage(), millivolts: reading.millivolts(), charging: reading.charging() });
