@@ -7,8 +7,10 @@ interoperability and desktop UI; Cargo fetches them during a build.
 
 ## Features
 
-- Numeric battery icon in the Windows system tray; hover for the estimated
-  percentage and actual measured millivolts.
+- Native taskbar indicator with a headset outline and adjacent battery percentage.
+  It anchors near the notification area, follows the taskbar theme and DPI,
+  hides for fullscreen apps, and falls back to the normal tray icon when the
+  taskbar layout cannot be located.
 - Click the icon (or choose Battery details) for a dark, compact details card
   with a charge bar and a real 12-hour history chart.
 - Refresh every 60 seconds, manual refresh, and an Exit menu.
@@ -17,8 +19,8 @@ interoperability and desktop UI; Cargo fetches them during a build.
 - Approximate remaining time only after sufficient uninterrupted discharge data.
 - No telemetry, no G HUB, no firmware flashing. The HID reader uses the tested
   temporary remote battery-query session and closes it after each query.
-- No auto-start or notification balloon in this first version. The icon is a
-  standard system-tray icon, not an external overlay attached to the taskbar.
+- Below 20%, the percentage changes colour. No auto-start or notification balloon yet.
+  The overlay is a separate non-activating Win32 window, not Explorer injection.
 
 The percentage is an estimate from actual cell voltage, and is not an exact
 fuel-gauge reading. Charging state is not detected; voltage during charging or
@@ -34,7 +36,8 @@ a device-reported number.
 | `receiver.rs` | G435Receiver struct implementing BatterySource; HID I/O |
 | `history.rs` | BatteryHistory owns samples, storage and trend calculation |
 | `app.rs` | TrayApp struct implements winit ApplicationHandler; background query |
-| `icon.rs` | BatteryIcon renders a numeric RGBA image |
+| `icon.rs` | BatteryIcon renders a numeric RGBA image (fallback) |
+| `taskbar.rs` | Native layered widget renders a headset outline and percentage |
 | `details.rs` | DetailsCard implements eframe App for the dashboard |
 | `bin/diagnostic.rs` | Console one-shot test utility |
 
@@ -68,9 +71,8 @@ commit it after the first successful build to freeze dependency resolution.
 The supplied hardware diagnostic capture shows 3861 mV and ~64%. All eight
 request reports and the battery response were independently checked against
 that capture. The Rust integration tests encode these exact reports.
-Rust compilation and Windows UI/hardware execution have not yet been performed
-in the development environment (no Rust compiler or physical USB receiver);
-the GitHub Actions workflow is the next verification step.
+The v0.1.0 build passed all four Windows CI tests. The new native taskbar widget
+is introduced in v0.2.0 and requires UI validation on real Windows hardware.
 
 ## Technical references
 
