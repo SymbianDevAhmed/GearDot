@@ -11,7 +11,7 @@ cargo test --all-targets
 if errorlevel 1 goto failed
 cargo build --release --bins
 if errorlevel 1 goto failed
-echo Build complete: target\release\g435-battery.exe
+echo Build complete: target\release\wireless-battery-monitor.exe
 pause
 exit /b 0
 :failed
