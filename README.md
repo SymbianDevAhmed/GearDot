@@ -1,6 +1,10 @@
 # 🔋 Wireless Battery Monitor – Rust
 
 <p align="center">
+  <img src="assets/icon.svg" width="112" alt="Wireless Battery Monitor original emblem"/>
+</p>
+
+<p align="center">
   A lightweight Windows taskbar battery monitor for Logitech G435 LIGHTSPEED and VXE MAD R, with live readings, charging status, battery history, and estimated remaining time.
 </p>
 
@@ -35,6 +39,7 @@ Both readings appear side by side next to the Windows notification area, using a
 - 💤 **Sleep Handling** — Briefly retain the mouse's last reading, marked with a tilde and muted colour, when it stops responding; show an unavailable value after the grace period.
 - 📈 **Battery History** — View each device's last 12 hours of recorded samples and a conservative discharge-based time estimate when sufficient data is available.
 - 🛡️ **Privacy** — Keep readings locally; no telemetry, external service, or firmware changes.
+- 🎨 **Original App Icon** — A custom headset, mouse and charge emblem, embedded in the Windows executable and details window.
 - 📦 **Portable EXE** — Run without installing Rust, .NET or G HUB.
 
 ---
@@ -106,6 +111,9 @@ Wireless-Battery-Monitor/
 ├── tests/
 │   └── protocol_capture.rs
 ├── BUILD.cmd
+├── assets/
+│   └── icon.svg
+├── build.rs
 ├── Cargo.toml
 ├── THIRD-PARTY-NOTICES.txt
 └── README.md
@@ -131,7 +139,7 @@ Wireless-Battery-Monitor/
 ### Download
 
 1. Open the [Releases](https://github.com/SymbianDevAhmed/Wireless-Battery-Monitor/releases) page.
-2. Download `wireless-battery-monitor.exe` from the v0.3.0 or later release.
+2. Download `wireless-battery-monitor.exe` from the [latest stable release](https://github.com/SymbianDevAhmed/Wireless-Battery-Monitor/releases/latest).
 3. Connect the supported USB receivers and switch on the peripherals.
 4. Run the executable. The percentages appear on the taskbar when the devices respond.
 
@@ -170,7 +178,7 @@ The tests check:
 
 The original G435 diagnostic was performed on the actual `046D:0ADF` receiver. The v0.2.0 Windows release passed four automated tests, and the headset widget was confirmed by the user.
 
-MAD R support is based on the documented battery-report format and must still be verified using the actual mouse. Run `diagnostic.exe` to compare its reported percentage against ATK Gear. A missing response is not treated as a zero-percent battery.
+MAD R support is based on the documented battery-report format; the owner reported that v0.3.0 worked on their setup. The v1.0.0 release retains the same battery protocols and adds application branding and CI improvements. Run `diagnostic.exe` to compare its reported percentage against ATK Gear. A missing response is not treated as a zero-percent battery.
 
 ---
 
@@ -195,6 +203,8 @@ MAD R support is based on the documented battery-report format and must still be
 ---
 
 ## 🔗 Technical References
+
+- [Windows resource embedding](https://docs.rs/winresource/) and [SVG rendering](https://docs.rs/resvg/) — the original vector icon is rendered during the build.
 
 - [The Rust Programming Language — Object-Oriented Features](https://doc.rust-lang.org/book/ch17-01-what-is-oo.html)
 - [HIDAPI Rust Documentation](https://docs.rs/hidapi/)
