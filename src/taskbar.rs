@@ -9,7 +9,7 @@ use windows_sys::Win32::{
 
 #[derive(Clone, Copy, Debug)]
 pub enum WidgetEvent {
-    Details, Refresh, Exit, Visibility(bool),
+    Details, Settings, Refresh, Exit, Visibility(bool),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -17,6 +17,8 @@ pub struct WidgetReading {
     pub level: Option<u8>,
     pub charging: bool,
     pub stale: bool,
+    pub full: bool,
+    pub low_threshold: u8,
 }
 
 struct WidgetState {
@@ -117,6 +119,7 @@ unsafe fn context_menu(hwnd: HWND, state: &WidgetState) {
     let menu = CreatePopupMenu();
     if menu.is_null() { return; }
     AppendMenuW(menu, MF_STRING, 1, wide("Battery details").as_ptr());
+    AppendMenuW(menu, MF_STRING, 4, wide("Settings").as_ptr());
     AppendMenuW(menu, MF_STRING, 2, wide("Refresh now").as_ptr());
     AppendMenuW(menu, MF_SEPARATOR, 0, null());
     AppendMenuW(menu, MF_STRING, 3, wide("Exit").as_ptr());
@@ -131,6 +134,7 @@ unsafe fn context_menu(hwnd: HWND, state: &WidgetState) {
         1 => (state.emit)(WidgetEvent::Details),
         2 => (state.emit)(WidgetEvent::Refresh),
         3 => (state.emit)(WidgetEvent::Exit),
+        4 => (state.emit)(WidgetEvent::Settings),
         _ => {}
     }
 }
@@ -255,7 +259,9 @@ unsafe fn paint(hwnd: HWND, x: i32, y: i32, width: i32, height: i32,
             MoveToEx(dc, left+s(9), top+s(1), null_mut());
             LineTo(dc, left+s(9), top+s(7));
         }
-        let text = wide(&reading.level.map(|v| format!("{}{}%", if reading.stale { "~" } else { "" }, v)).unwrap_or_else(|| "--%".into()));
+        let text = wide(&if reading.full { "Full".into() }
+            else if reading.charging { reading.level.map(|v| format!("{v}%⚡")).unwrap_or_else(|| "--%".into()) }
+            else { reading.level.map(|v| format!("{}{}%", if reading.stale { "~" } else { "" }, v)).unwrap_or_else(|| "--%".into()) });
         let mut rect = RECT { left: origin+s(25), top: 0, right: origin+s(72)-s(2), bottom: height };
         DrawTextW(dc, text.as_ptr(), (text.len()-1) as i32, &mut rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
@@ -271,9 +277,9 @@ unsafe fn paint(hwnd: HWND, x: i32, y: i32, width: i32, height: i32,
         let reading = readings[((index % width as usize) >= s(72) as usize) as usize];
         let rgb = if reading.stale || reading.level.is_none() {
             if light { (110u32, 110u32, 110u32) } else { (155, 155, 155) }
-        } else if reading.charging {
+        } else if reading.charging || reading.full {
             if light { (0, 115, 60) } else { (89, 210, 145) }
-        } else if reading.level.is_some_and(|v| v < 20) {
+        } else if reading.level.is_some_and(|v| v <= reading.low_threshold) {
             if light { (170, 25, 38) } else { (255, 126, 137) }
         } else if light { (32, 32, 32) } else { (248, 248, 248) };
         let a = (*pixel & 0xff).max(1);
