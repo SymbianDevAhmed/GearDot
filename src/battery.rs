@@ -5,6 +5,8 @@ use std::fmt;
 pub struct BatteryReading {
     millivolts: u16,
     percentage: u8,
+    estimated: bool,
+    charging: Option<bool>,
 }
 
 impl BatteryReading {
@@ -35,9 +37,18 @@ impl BatteryReading {
                 Some(p0 + ((numerator + width / 2) / width) as u8)
             }).ok_or(BatteryError::InvalidVoltage)?
         };
-        Ok(Self { millivolts, percentage })
+        Ok(Self { millivolts, percentage, estimated: true, charging: None })
     }
 
+    pub fn from_reported(millivolts: u16, percentage: u8, charging: bool) -> Result<Self, BatteryError> {
+        if !(2500..=4500).contains(&millivolts) || percentage > 100 {
+            return Err(BatteryError::InvalidVoltage);
+        }
+        Ok(Self { millivolts, percentage, estimated: false, charging: Some(charging) })
+    }
+
+    pub fn estimated(self) -> bool { self.estimated }
+    pub fn charging(self) -> Option<bool> { self.charging }
     pub fn millivolts(self) -> u16 { self.millivolts }
     pub fn percentage(self) -> u8 { self.percentage }
     pub fn is_low(self) -> bool { self.percentage < 20 }
@@ -54,8 +65,8 @@ pub enum BatteryError {
 impl fmt::Display for BatteryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ReceiverNotFound => write!(f, "G435 receiver (046D:0ADF) not found"),
-            Self::NoReply => write!(f, "No battery reply; check that the headset is on"),
+            Self::ReceiverNotFound => write!(f, "USB receiver not found"),
+            Self::NoReply => write!(f, "No battery reply; device may be asleep or off"),
             Self::InvalidVoltage => write!(f, "Invalid battery voltage"),
             Self::Io(message) => write!(f, "HID error: {message}"),
         }
@@ -63,6 +74,22 @@ impl fmt::Display for BatteryError {
 }
 
 impl std::error::Error for BatteryError {}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DeviceKind {
+    #[default]
+    Headset,
+    Mouse,
+}
+impl DeviceKind {
+    pub const ALL: [Self; 2] = [Self::Headset, Self::Mouse];
+    pub fn name(self) -> &'static str {
+        match self { Self::Headset => "Logitech G435", Self::Mouse => "VXE MAD R" }
+    }
+    pub fn index(self) -> usize {
+        match self { Self::Headset => 0, Self::Mouse => 1 }
+    }
+}
 
 /// Abstraction: the UI does not depend on a particular headset or USB API.
 pub trait BatterySource {
