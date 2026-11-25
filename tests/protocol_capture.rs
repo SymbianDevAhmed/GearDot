@@ -1,4 +1,4 @@
-use g435_battery::{battery::{BatteryReading, BatteryError}, protocol::G435Protocol};
+use wireless_battery_monitor::{battery::{BatteryReading, BatteryError}, protocol::G435Protocol};
 
 #[test]
 fn captured_requests_match() {
