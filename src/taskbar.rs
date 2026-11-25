@@ -12,10 +12,17 @@ pub enum WidgetEvent {
     Details, Refresh, Exit, Visibility(bool),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WidgetReading {
+    pub level: Option<u8>,
+    pub charging: bool,
+    pub stale: bool,
+}
+
 struct WidgetState {
-    level: Option<u8>,
+    readings: [WidgetReading; 2],
     shown: bool,
-    last_layout: Option<(i32, i32, i32, i32, u32, bool, Option<u8>)>,
+    last_layout: Option<(i32, i32, i32, i32, u32, bool, [WidgetReading; 2])>,
     emit: Box<dyn Fn(WidgetEvent)>,
 }
 
@@ -31,7 +38,7 @@ fn px(n: i32, dpi: u32) -> i32 { (n * dpi as i32 + 48) / 96 }
 impl TaskbarWidget {
     pub fn new(emit: impl Fn(WidgetEvent) + 'static) -> Option<Self> {
         let mut state = Box::new(RefCell::new(WidgetState {
-            level: None, shown: false, last_layout: None, emit: Box::new(emit),
+            readings: [WidgetReading::default(); 2], shown: false, last_layout: None, emit: Box::new(emit),
         }));
         unsafe {
             let class = wide("G435BatteryTaskbarWidget");
@@ -46,7 +53,7 @@ impl TaskbarWidget {
             if RegisterClassW(&wc) == 0 { return None; }
             let hwnd = CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
-                class.as_ptr(), wide("G435 Battery").as_ptr(), WS_POPUP,
+                class.as_ptr(), wide("Wireless Battery Monitor").as_ptr(), WS_POPUP,
                 0, 0, 0, 0, null_mut(), null_mut(), instance,
                 (&mut *state as *mut RefCell<WidgetState>).cast::<c_void>(),
             );
@@ -60,9 +67,9 @@ impl TaskbarWidget {
         }
     }
 
-    pub fn set_level(&mut self, level: Option<u8>) {
+    pub fn set_readings(&mut self, readings: [WidgetReading; 2]) {
         let mut state = self.state.borrow_mut();
-        state.level = level;
+        state.readings = readings;
         unsafe { refresh_layout(self.hwnd, &mut state); }
     }
 }
@@ -174,7 +181,7 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
     }
     let dpi = GetDpiForWindow(taskbar).max(96);
     let h = bar.bottom - bar.top;
-    let w = px(78, dpi);
+    let w = px(144, dpi);
     // Do not cover a hidden/vertical taskbar or a tray that cannot be located.
     let shown_height = bar.bottom.min(monitor.rcMonitor.bottom) - bar.top.max(monitor.rcMonitor.top);
     if h < px(20, dpi) || bar.right - bar.left < h * 4 ||
@@ -185,9 +192,9 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
     let x = notify.left - w - px(4, dpi);
     let y = bar.top;
     let light = light_taskbar();
-    let layout = (x, y, w, h, dpi, light, state.level);
+    let layout = (x, y, w, h, dpi, light, state.readings);
     if state.last_layout != Some(layout) {
-        if !paint(hwnd, x, y, w, h, dpi, light, state.level) {
+        if !paint(hwnd, x, y, w, h, dpi, light, state.readings) {
             visibility(hwnd, state, false); return;
         }
         state.last_layout = Some(layout);
@@ -197,7 +204,7 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
 }
 
 unsafe fn paint(hwnd: HWND, x: i32, y: i32, width: i32, height: i32,
-    dpi: u32, light: bool, level: Option<u8>) -> bool {
+    dpi: u32, light: bool, readings: [WidgetReading; 2]) -> bool {
     let dc = CreateCompatibleDC(null_mut());
     if dc.is_null() { return false; }
     let mut info: BITMAPINFO = zeroed();
@@ -215,45 +222,61 @@ unsafe fn paint(hwnd: HWND, x: i32, y: i32, width: i32, height: i32,
     }
     let old_bitmap = SelectObject(dc, bitmap);
     let count = (width * height) as usize;
-    let pixels = std::slice::from_raw_parts_mut(bits.cast::<u32>(), count);
-    pixels.fill(0);
+    std::slice::from_raw_parts_mut(bits.cast::<u32>(), count).fill(0);
     SetBkMode(dc, TRANSPARENT as i32);
     SetTextColor(dc, 0x00ff_ffff);
     let pen = CreatePen(PS_SOLID, px(1, dpi).max(1), 0x00ff_ffff);
     let old_pen = SelectObject(dc, pen);
     let old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
     let top = (height - px(18, dpi)) / 2;
-    let left = px(5, dpi);
     let s = |v| px(v, dpi);
-    // Headphone outline: arch, two padded earcups, and short stems.
-    Arc(dc, left+s(1), top+s(1), left+s(17), top+s(17),
-        left+s(17), top+s(10), left+s(1), top+s(10));
-    MoveToEx(dc, left+s(1), top+s(9), null_mut());
-    LineTo(dc, left+s(1), top+s(14));
-    MoveToEx(dc, left+s(17), top+s(9), null_mut());
-    LineTo(dc, left+s(17), top+s(14));
-    RoundRect(dc, left+s(1), top+s(10), left+s(5), top+s(17), s(2), s(2));
-    RoundRect(dc, left+s(13), top+s(10), left+s(17), top+s(17), s(2), s(2));
-    SelectObject(dc, old_brush);
-    SelectObject(dc, old_pen);
-    DeleteObject(pen);
     let font = CreateFontW(-s(13), 0, 0, 0, FW_NORMAL as i32, 0, 0, 0,
         DEFAULT_CHARSET as u32, OUT_DEFAULT_PRECIS as u32, CLIP_DEFAULT_PRECIS as u32,
         ANTIALIASED_QUALITY as u32, DEFAULT_PITCH as u32, wide("Segoe UI").as_ptr());
     let old_font = SelectObject(dc, font);
-    let text = wide(&level.map(|v| format!("{v}%")).unwrap_or_else(|| "--%".into()));
-    let mut rect = RECT { left: s(30), top: 0, right: width-s(2), bottom: height };
-    DrawTextW(dc, text.as_ptr(), (text.len()-1) as i32, &mut rect,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    for (index, reading) in readings.iter().enumerate() {
+        let origin = s(72 * index as i32);
+        let left = origin + s(4);
+        if index == 0 {
+            // Headphone outline.
+            Arc(dc, left+s(1), top+s(1), left+s(17), top+s(17),
+                left+s(17), top+s(10), left+s(1), top+s(10));
+            MoveToEx(dc, left+s(1), top+s(9), null_mut());
+            LineTo(dc, left+s(1), top+s(14));
+            MoveToEx(dc, left+s(17), top+s(9), null_mut());
+            LineTo(dc, left+s(17), top+s(14));
+            RoundRect(dc, left+s(1), top+s(10), left+s(5), top+s(17), s(2), s(2));
+            RoundRect(dc, left+s(13), top+s(10), left+s(17), top+s(17), s(2), s(2));
+        } else {
+            // Original mouse outline: rounded body, split buttons and wheel.
+            RoundRect(dc, left+s(3), top, left+s(15), top+s(18), s(10), s(10));
+            MoveToEx(dc, left+s(4), top+s(7), null_mut());
+            LineTo(dc, left+s(14), top+s(7));
+            MoveToEx(dc, left+s(9), top+s(1), null_mut());
+            LineTo(dc, left+s(9), top+s(7));
+        }
+        let text = wide(&reading.level.map(|v| format!("{}{}%", if reading.stale { "~" } else { "" }, v)).unwrap_or_else(|| "--%".into()));
+        let mut rect = RECT { left: origin+s(25), top: 0, right: origin+s(72)-s(2), bottom: height };
+        DrawTextW(dc, text.as_ptr(), (text.len()-1) as i32, &mut rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    }
     SelectObject(dc, old_font);
     DeleteObject(font);
+    SelectObject(dc, old_brush);
+    SelectObject(dc, old_pen);
+    DeleteObject(pen);
     GdiFlush();
-    // GDI draws the mask as grayscale; convert to premultiplied BGRA for layered-window alpha.
-    let rgb = if level.is_some_and(|v| v < 20) {
-        if light { (170u32, 25u32, 38u32) } else { (255, 126, 137) }
-    } else if light { (32, 32, 32) } else { (248, 248, 248) };
-    for pixel in pixels {
-        let a = (*pixel & 0xff).max(1); // nearly transparent hit area lets clicks on the label work
+    // Per-device foreground colour so the headphones and mouse stay independent.
+    let pixels = std::slice::from_raw_parts_mut(bits.cast::<u32>(), count);
+    for (index, pixel) in pixels.iter_mut().enumerate() {
+        let reading = readings[((index % width as usize) >= s(72) as usize) as usize];
+        let rgb = if reading.stale || reading.level.is_none() {
+            if light { (110u32, 110u32, 110u32) } else { (155, 155, 155) }
+        } else if reading.charging {
+            if light { (0, 115, 60) } else { (89, 210, 145) }
+        } else if reading.level.is_some_and(|v| v < 20) {
+            if light { (170, 25, 38) } else { (255, 126, 137) }
+        } else if light { (32, 32, 32) } else { (248, 248, 248) };
+        let a = (*pixel & 0xff).max(1);
         let r = rgb.0 * a / 255;
         let g = rgb.1 * a / 255;
         let b = rgb.2 * a / 255;
