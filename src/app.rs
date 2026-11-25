@@ -1,4 +1,5 @@
 use crate::icon::BatteryIcon;
+use crate::taskbar::{TaskbarWidget, WidgetEvent};
 use g435_battery::battery::{BatteryError, BatteryReading, BatterySource};
 use g435_battery::receiver::G435Receiver;
 use g435_battery::history::BatteryHistory;
@@ -16,12 +17,14 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 enum Event {
     Menu(MenuEvent),
     Tray(TrayIconEvent),
+    Widget(WidgetEvent),
     Reading(Result<BatteryReading, BatteryError>),
 }
 
 /// Presentation layer owns all tray resources; HID requests run on background threads.
 pub struct TrayApp {
     tray: Option<TrayIcon>,
+    widget: Option<TaskbarWidget>,
     status: MenuItem,
     refresh: MenuItem,
     details: MenuItem,
@@ -49,6 +52,7 @@ impl TrayApp {
         }));
         let mut app = Self {
             tray: None,
+            widget: None,
             status: MenuItem::new("Checking G435...", false, None),
             refresh: MenuItem::new("Refresh now", true, None),
             details: MenuItem::new("Battery details", true, None),
@@ -80,6 +84,8 @@ impl TrayApp {
             .with_menu_on_left_click(false)
             .with_icon(BatteryIcon::render(None)?)
             .build()?);
+        let proxy = self.proxy.clone();
+        self.widget = TaskbarWidget::new(move |event| { let _ = proxy.send_event(Event::Widget(event)); });
         Ok(())
     }
 
@@ -117,6 +123,7 @@ impl TrayApp {
             Err(error) => (None, format!("G435: {error}")),
         };
         self.status.set_text(&message);
+        if let Some(widget) = self.widget.as_mut() { widget.set_level(level); }
         if let Some(tray) = &self.tray {
             if let Ok(icon) = BatteryIcon::render(level) {
                 let _ = tray.set_icon(Some(icon));
@@ -148,6 +155,14 @@ impl ApplicationHandler<Event> for TrayApp {
             Event::Menu(_) => {},
             Event::Tray(TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }) => self.open_details(),
             Event::Tray(_) => {},
+            Event::Widget(WidgetEvent::Details) => self.open_details(),
+            Event::Widget(WidgetEvent::Refresh) => self.request_reading(),
+            Event::Widget(WidgetEvent::Exit) => {
+                if self.pending { self.quitting = true; } else { event_loop.exit(); }
+            },
+            Event::Widget(WidgetEvent::Visibility(visible)) => {
+                if let Some(tray) = &self.tray { let _ = tray.set_visible(!visible); }
+            },
             Event::Reading(reading) => {
                 self.apply_reading(reading);
                 if self.quitting { event_loop.exit(); }
