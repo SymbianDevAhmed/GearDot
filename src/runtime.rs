@@ -22,6 +22,15 @@ impl InstanceGuard {
 }
 impl Drop for InstanceGuard { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
 
+pub fn system_light_theme() -> bool {
+    let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+    let name = wide("AppsUseLightTheme");
+    let mut value = 0u32;
+    let mut length = size_of::<u32>() as u32;
+    unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_DWORD,
+        null_mut(), (&mut value as *mut u32).cast(), &mut length) == 0 && value != 0 }
+}
+
 pub fn focus_details() {
     unsafe {
         let title = wide("Wireless Battery Monitor — Details & Settings");
