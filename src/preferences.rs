@@ -3,6 +3,52 @@ use crate::battery::{BatteryReading, DeviceKind};
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::PathBuf};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Accent {
+    #[default] System,
+    Mint,
+    Blue,
+    Violet,
+}
+impl Accent {
+    pub const ALL: [Self; 4] = [Self::System, Self::Mint, Self::Blue, Self::Violet];
+    pub fn label(self) -> &'static str {
+        match self { Self::System => "System", Self::Mint => "Mint", Self::Blue => "Blue", Self::Violet => "Violet" }
+    }
+    pub fn rgb(self, light: bool) -> (u32, u32, u32) {
+        match (self, light) {
+            (Self::System, true) => (32,32,32), (Self::System, false) => (248,248,248),
+            (Self::Mint, true) => (0,106,79), (Self::Mint, false) => (105,222,184),
+            (Self::Blue, true) => (16,82,160), (Self::Blue, false) => (130,190,255),
+            (Self::Violet, true) => (92,45,155), (Self::Violet, false) => (194,154,250),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Theme {
+    #[default] System,
+    Dark,
+    Light,
+}
+impl Theme {
+    pub const ALL: [Self; 3] = [Self::System, Self::Dark, Self::Light];
+    pub fn label(self) -> &'static str {
+        match self { Self::System => "System", Self::Dark => "Dark", Self::Light => "Light" }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WidgetOptions {
+    pub visible: [bool; 2],
+    pub scale: u16,
+    pub accent: Accent,
+    pub animate: bool,
+}
+impl Default for WidgetOptions {
+    fn default() -> Self { Self { visible: [true, true], scale: 100, accent: Accent::System, animate: true } }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -11,11 +57,23 @@ pub struct Settings {
     pub full_notifications: bool,
     pub low_threshold: u8,
     pub refresh_seconds: u64,
+    pub show_headset: bool,
+    pub show_mouse: bool,
+    pub widget_scale: u16,
+    pub widget_accent: Accent,
+    pub animate_charging: bool,
+    pub theme: Theme,
+    pub chart_hours: u8,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { start_with_windows: false, low_notifications: true, full_notifications: true, low_threshold: 20, refresh_seconds: 60 }
+        Self {
+            start_with_windows: false, low_notifications: true, full_notifications: true,
+            low_threshold: 20, refresh_seconds: 60, show_headset: true, show_mouse: true,
+            widget_scale: 100, widget_accent: Accent::System, animate_charging: true,
+            theme: Theme::System, chart_hours: 12,
+        }
     }
 }
 
@@ -23,7 +81,12 @@ impl Settings {
     pub fn validated(mut self) -> Self {
         self.low_threshold = self.low_threshold.clamp(5, 50);
         self.refresh_seconds = self.refresh_seconds.clamp(15, 300);
+        self.widget_scale = self.widget_scale.clamp(80, 130);
+        if ![3,6,12,24,48].contains(&self.chart_hours) { self.chart_hours = 12; }
         self
+    }
+    pub fn widget_options(&self) -> WidgetOptions {
+        WidgetOptions { visible: [self.show_headset, self.show_mouse], scale: self.widget_scale, accent: self.widget_accent, animate: self.animate_charging }
     }
     pub fn load() -> Self { read_json::<Self>("settings.json").unwrap_or_default().validated() }
     pub fn save(&self) -> io::Result<()> { write_json("settings.json", &self.clone().validated()) }
@@ -96,7 +159,7 @@ impl LiveSnapshot {
     pub fn save(&self) -> io::Result<()> { write_json("live-status.json", self) }
     pub fn reading(&self, kind: DeviceKind, now: u64) -> LiveReading {
         let mut reading = self.devices[kind.index()].clone();
-        if reading.checked_at == 0 || now.saturating_sub(reading.checked_at) > self.refresh_seconds.max(15) * 2 + 30 {
+        if reading.checked_at == 0 || now.saturating_sub(reading.checked_at) > self.refresh_seconds.clamp(15, 300) * 2 + 30 {
             reading.stale = true;
             reading.message = "No recent live update; start the monitor or reconnect the device.".into();
         }
@@ -184,7 +247,20 @@ mod tests {
         let partial = serde_json::from_str::<Settings>(r#"{"refresh_seconds":30}"#).unwrap();
         assert!(partial.low_notifications);
         assert!(!partial.start_with_windows);
+        assert_eq!(partial.widget_options(), WidgetOptions::default());
+        assert_eq!(partial.theme, Theme::System);
+        assert_eq!(partial.chart_hours, 12);
         assert_eq!(partial.refresh_seconds, 30);
+    }
+    #[test]
+    fn appearance_preferences_are_bounded() {
+        let s = Settings { widget_scale: 250, chart_hours: 13, show_headset: false,
+            widget_accent: Accent::Violet, theme: Theme::Light, ..Default::default() }.validated();
+        assert_eq!(s.widget_scale, 130);
+        assert_eq!(s.chart_hours, 12);
+        assert_eq!(s.widget_options().visible, [false, true]);
+        assert_eq!(s.widget_options().accent, Accent::Violet);
+        assert_eq!(s.theme, Theme::Light);
     }
     #[test]
     fn estimated_voltage_never_claims_confirmed_full() {
