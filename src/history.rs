@@ -1,5 +1,5 @@
 //! Local battery history and conservative discharge estimates.
-use crate::battery::BatteryReading;
+use crate::battery::{BatteryReading, DeviceKind};
 use std::{fs, io, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
 
 const RETENTION: u64 = 48 * 3600;
@@ -9,11 +9,13 @@ pub struct Sample {
     pub at: u64,
     pub percent: u8,
     pub millivolts: u16,
+    pub charging: Option<bool>,
 }
 
 #[derive(Default)]
 pub struct BatteryHistory {
     samples: Vec<Sample>,
+    device: DeviceKind,
 }
 
 impl BatteryHistory {
@@ -21,14 +23,14 @@ impl BatteryHistory {
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
     }
 
-    fn path() -> io::Result<PathBuf> {
+    fn path(device: DeviceKind) -> io::Result<PathBuf> {
         let base = std::env::var_os("LOCALAPPDATA")
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "LOCALAPPDATA unavailable"))?;
-        Ok(PathBuf::from(base).join("G435Battery").join("history.csv"))
+        Ok(PathBuf::from(base).join("G435Battery").join(match device { DeviceKind::Headset => "history.csv", DeviceKind::Mouse => "mad-r-history.csv" }))
     }
 
-    pub fn load() -> Self {
-        let data = Self::path().and_then(fs::read_to_string).unwrap_or_default();
+    pub fn load(device: DeviceKind) -> Self {
+        let data = Self::path(device).and_then(fs::read_to_string).unwrap_or_default();
         let now = Self::now();
         let mut samples: Vec<_> = data.lines().filter_map(|line| {
             let mut parts = line.split(',');
@@ -37,10 +39,11 @@ impl BatteryHistory {
             let millivolts: u16 = parts.next()?.parse().ok()?;
             if !(2500..=4500).contains(&millivolts) || percent > 100 ||
                 at > now || now - at > RETENTION { return None; }
-            Some(Sample { at, percent, millivolts })
+            let charging = match parts.next() { Some("1") => Some(true), Some("0") => Some(false), _ => None };
+            Some(Sample { at, percent, millivolts, charging })
         }).collect();
         samples.sort_by_key(|s| s.at);
-        Self { samples }
+        Self { samples, device }
     }
 
     pub fn record(&mut self, reading: BatteryReading) -> io::Result<()> {
@@ -49,11 +52,11 @@ impl BatteryHistory {
         if self.samples.last().is_some_and(|s| now.saturating_sub(s.at) < 60) {
             return Ok(());
         }
-        self.samples.push(Sample { at: now, percent: reading.percentage(), millivolts: reading.millivolts() });
-        let path = Self::path()?;
+        self.samples.push(Sample { at: now, percent: reading.percentage(), millivolts: reading.millivolts(), charging: reading.charging() });
+        let path = Self::path(self.device)?;
         if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
         let csv: String = self.samples.iter()
-            .map(|s| format!("{},{},{}\n", s.at, s.percent, s.millivolts)).collect();
+            .map(|s| format!("{},{},{},{}\n", s.at, s.percent, s.millivolts, match s.charging { Some(true) => "1", Some(false) => "0", None => "" })).collect();
         fs::write(path, csv)
     }
 
@@ -63,11 +66,11 @@ impl BatteryHistory {
     /// Estimate from a recent uninterrupted falling trend only.
     pub fn hours_remaining(&self, now: u64) -> Option<f64> {
         let last = self.latest()?;
-        if now < last.at || now - last.at > 180 { return None; }
+        if last.charging == Some(true) || now < last.at || now - last.at > 180 { return None; }
         let mut segment = vec![last];
         for older in self.samples.iter().rev().skip(1) {
             let newer = *segment.last()?;
-            if newer.at - older.at > 600 || newer.percent > older.percent.saturating_add(2) ||
+            if older.charging == Some(true) || newer.at - older.at > 600 || newer.percent > older.percent.saturating_add(2) ||
                 last.at - older.at > 12 * 3600 { break; }
             segment.push(*older);
         }
@@ -93,12 +96,13 @@ mod tests {
             at: 10_000 + i * 300,
             percent: 90 - i as u8,
             millivolts: 4000,
+            charging: None,
         }).collect();
-        let history = BatteryHistory { samples };
+        let history = BatteryHistory { samples, device: DeviceKind::Headset };
         let now = 17_200;
         assert_eq!(history.hours_remaining(now), Some(5.5));
         assert_eq!(history.hours_remaining(now + 181), None);
-        let insufficient = BatteryHistory { samples: history.samples[..3].to_vec() };
+        let insufficient = BatteryHistory { samples: history.samples[..3].to_vec(), device: DeviceKind::Headset };
         assert_eq!(insufficient.hours_remaining(10_600), None);
     }
 }
