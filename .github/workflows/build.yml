@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - "src/**"
-      - "tests/**"
-      - "Cargo.toml"
-      - ".github/workflows/build.yml"
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
     inputs:
       publish_preview:
-        description: "Publish Windows v0.2.0 preview to Releases after tests pass"
+        description: Publish preview to Releases after tests pass
         type: boolean
         default: false
 
@@ -25,19 +25,26 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - name: Select Rust stable
         run: rustup default stable
+      - name: Read package version
+        id: version
+        run: |
+          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          "version=$($metadata.packages[0].version)" >> $env:GITHUB_OUTPUT
       - name: Run protocol and domain tests
         run: cargo test --all-targets
       - name: Build portable executables
         run: cargo build --release --bins
       - uses: actions/upload-artifact@v4
         with:
-          name: G435Battery-windows-x64
+          name: WirelessBatteryMonitor-windows-x64
           path: |
-            target/release/g435-battery.exe
+            target/release/wireless-battery-monitor.exe
             target/release/diagnostic.exe
           if-no-files-found: error
 
@@ -47,19 +54,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: G435Battery-windows-x64
+          name: WirelessBatteryMonitor-windows-x64
           path: dist
-      - name: Publish tested build
+      - name: Publish tested preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.windows.outputs.version }}
         run: |
-          set -euo pipefail
-          test -s dist/g435-battery.exe
-          test -s dist/diagnostic.exe
-          (cd dist && zip G435Battery-windows-x64.zip g435-battery.exe diagnostic.exe)
-          gh release create v0.2.0 dist/g435-battery.exe dist/diagnostic.exe dist/G435Battery-windows-x64.zip --target "$GITHUB_SHA" --title "G435 Battery Monitor v0.2.0" --prerelease --notes "Native taskbar widget with a headset outline and adjacent battery percentage. Light/dark theme-aware, low-battery colour, and a tray fallback. This Windows build passed the automated Rust tests; real-device and taskbar layout validation is pending."
-          gh release view v0.2.0 --json url,assets
+          cd dist
+          zip WirelessBatteryMonitor-windows-x64.zip wireless-battery-monitor.exe diagnostic.exe
+          gh release create "v$VERSION" wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-windows-x64.zip --target "$GITHUB_SHA" --title "Wireless Battery Monitor v$VERSION" --prerelease --notes "Native dual-device battery widget for Logitech G435 and VXE MAD R. MAD R support is a hardware-validation preview. Automated tests passed."
