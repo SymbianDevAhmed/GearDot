@@ -2,10 +2,25 @@ name: Build Windows EXE
 
 on:
   push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - ".github/workflows/build.yml"
   workflow_dispatch:
+    inputs:
+      publish_preview:
+        description: "Publish Windows v0.2.0 preview to Releases after tests pass"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   windows:
@@ -25,3 +40,26 @@ jobs:
             target/release/g435-battery.exe
             target/release/diagnostic.exe
           if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_preview
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: G435Battery-windows-x64
+          path: dist
+      - name: Publish tested build
+        run: |
+          set -euo pipefail
+          test -s dist/g435-battery.exe
+          test -s dist/diagnostic.exe
+          (cd dist && zip G435Battery-windows-x64.zip g435-battery.exe diagnostic.exe)
+          gh release create v0.2.0 dist/g435-battery.exe dist/diagnostic.exe dist/G435Battery-windows-x64.zip --target "$GITHUB_SHA" --title "G435 Battery Monitor v0.2.0" --prerelease --notes "Native taskbar widget with a headset outline and adjacent battery percentage. Light/dark theme-aware, low-battery colour, and a tray fallback. This Windows build passed the automated Rust tests; real-device and taskbar layout validation is pending."
+          gh release view v0.2.0 --json url,assets
