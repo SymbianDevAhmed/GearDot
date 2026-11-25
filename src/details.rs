@@ -3,7 +3,7 @@ use crate::runtime;
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use wireless_battery_monitor::{
     battery::DeviceKind, history::BatteryHistory,
-    preferences::{LiveSnapshot, Settings},
+    preferences::{Accent, LiveSnapshot, Settings, Theme},
 };
 use std::time::Duration;
 
@@ -40,7 +40,10 @@ struct DetailsCard {
 impl DetailsCard {
     fn battery_page(&self, ui: &mut egui::Ui) {
         let now = BatteryHistory::now();
-        let accent = Color32::from_rgb(93, 210, 173);
+        let dark = ui.visuals().dark_mode;
+        let accent = if dark { Color32::from_rgb(93, 210, 173) } else { Color32::from_rgb(0, 110, 82) };
+        let muted = ui.visuals().weak_text_color();
+        let low = if dark { Color32::LIGHT_RED } else { Color32::from_rgb(160, 25, 35) };
         let history = BatteryHistory::load(self.selected);
         let reading = LiveSnapshot::load().reading(self.selected, now);
         ui.heading(self.selected.name());
@@ -50,9 +53,9 @@ impl DetailsCard {
         }).weak());
         ui.add_space(12.0);
         if let Some(level) = reading.level {
-            let color = if reading.stale { Color32::GRAY }
+            let color = if reading.stale { muted }
                 else if reading.charging == Some(true) || reading.confirmed_full() { accent }
-                else if level <= Settings::load().low_threshold { Color32::LIGHT_RED } else { accent };
+                else if level <= Settings::load().low_threshold { low } else { accent };
             let estimated = reading.estimated || reading.stale;
             ui.label(egui::RichText::new(format!("{}{}%", if estimated { "~" } else { "" }, level))
                 .size(36.0).strong().color(color));
@@ -76,15 +79,25 @@ impl DetailsCard {
         if !reading.message.is_empty() { ui.label(egui::RichText::new(&reading.message).weak().small()); }
         ui.add_space(12.0);
         ui.separator();
-        ui.label(egui::RichText::new("BATTERY HISTORY  ·  LAST 12 HOURS").small().strong());
-        let (response, painter) = ui.allocate_painter(Vec2::new(ui.available_width(), 78.0), egui::Sense::hover());
-        draw_chart(&history, now, response.rect.shrink2(Vec2::new(4.0, 4.0)), &painter, accent);
+        ui.label(egui::RichText::new(format!("BATTERY HISTORY  ·  LAST {} HOURS", self.original.chart_hours)).small().strong());
+        let (response, painter) = ui.allocate_painter(Vec2::new(ui.available_width(), 118.0), egui::Sense::hover());
+        let mut plot = response.rect.shrink2(Vec2::new(4.0, 8.0));
+        plot.min.x += 29.0;
+        draw_chart(&history, now, self.original.chart_hours, plot, &painter, accent, muted);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("12h ago").weak().small());
+            ui.label(egui::RichText::new(format!("{}h ago", self.original.chart_hours)).weak().small());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(egui::RichText::new("Now").weak().small());
             });
         });
+        if let Some(stats) = history.statistics(now, self.original.chart_hours) {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("Min {}%", stats.minimum));
+                ui.label(format!("Max {}%", stats.maximum));
+                ui.label(format!("Net {:+} pp", stats.net_change));
+            });
+            ui.label(egui::RichText::new(format!("{} recorded samples", stats.count)).weak().small());
+        }
         ui.add_space(5.0);
         ui.label(egui::RichText::new(if self.selected == DeviceKind::Headset {
             "Charging state unavailable for G435 • Local data"
@@ -99,6 +112,29 @@ impl DetailsCard {
         ui.checkbox(&mut self.settings.start_with_windows, "Start with Windows");
         ui.label(egui::RichText::new("Starts at sign-in for your Windows account. Keep the EXE at a fixed location.").small().weak());
         ui.add(egui::Slider::new(&mut self.settings.refresh_seconds, 15..=300).suffix(" s").text("Refresh interval"));
+        ui.add_space(10.0);
+        ui.separator();
+        ui.label(egui::RichText::new("DEVICES").small().strong());
+        ui.checkbox(&mut self.settings.show_headset, "Show Logitech G435");
+        ui.checkbox(&mut self.settings.show_mouse, "Show VXE MAD R");
+        ui.label(egui::RichText::new("Hidden devices still collect history and alerts. If both are hidden, use the notification-area icon.").small().weak());
+        ui.add_space(10.0);
+        ui.separator();
+        ui.label(egui::RichText::new("APPEARANCE").small().strong());
+        egui::ComboBox::from_label("Window theme").selected_text(self.settings.theme.label()).show_ui(ui, |ui| {
+            for theme in Theme::ALL { ui.selectable_value(&mut self.settings.theme, theme, theme.label()); }
+        });
+        egui::ComboBox::from_label("Widget colour").selected_text(self.settings.widget_accent.label()).show_ui(ui, |ui| {
+            for accent in Accent::ALL { ui.selectable_value(&mut self.settings.widget_accent, accent, accent.label()); }
+        });
+        ui.add(egui::Slider::new(&mut self.settings.widget_scale, 80..=130).suffix("%").text("Widget size"));
+        ui.checkbox(&mut self.settings.animate_charging, "Animate charging indicator");
+        ui.horizontal(|ui| {
+            ui.label("History range");
+            egui::ComboBox::from_id_salt("history_range").selected_text(format!("{} hours", self.settings.chart_hours)).show_ui(ui, |ui| {
+                for hours in [3,6,12,24,48] { ui.selectable_value(&mut self.settings.chart_hours, hours, format!("{hours}h")); }
+            });
+        });
         ui.add_space(10.0);
         ui.separator();
         ui.label(egui::RichText::new("NOTIFICATIONS").small().strong());
@@ -143,7 +179,8 @@ impl DetailsCard {
 
 impl eframe::App for DetailsCard {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        ctx.set_visuals(egui::Visuals::dark());
+        let light = match self.settings.theme { Theme::System => runtime::system_light_theme(), Theme::Light => true, Theme::Dark => false };
+        ctx.set_visuals(if light { egui::Visuals::light() } else { egui::Visuals::dark() });
         ctx.request_repaint_after(Duration::from_secs(2));
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -164,28 +201,32 @@ impl eframe::App for DetailsCard {
     }
 }
 
-fn draw_chart(history: &BatteryHistory, now: u64, rect: Rect, painter: &egui::Painter, accent: Color32) {
-    for fraction in [0.0f32, 0.5, 1.0] {
+fn draw_chart(history: &BatteryHistory, now: u64, hours: u8, rect: Rect, painter: &egui::Painter, accent: Color32, muted: Color32) {
+    for fraction in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
         let y = rect.bottom() - rect.height() * fraction;
         painter.line_segment([Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
-            Stroke::new(1.0, Color32::from_gray(65)));
+            Stroke::new(0.5, muted.gamma_multiply(0.45)));
+        painter.text(Pos2::new(rect.left()-3.0, y), egui::Align2::RIGHT_CENTER,
+            format!("{:.0}%", fraction * 100.0), egui::FontId::proportional(10.0), muted);
     }
-    let start = now.saturating_sub(12 * 3600);
+    let span = u64::from(hours) * 3600;
+    let start = now.saturating_sub(span);
     let mut previous: Option<(u64, Pos2)> = None;
     for sample in history.samples().iter().filter(|s| s.at >= start && s.at <= now) {
-        let x = rect.left() + (sample.at - start) as f32 / (12 * 3600) as f32 * rect.width();
+        let x = rect.left() + (sample.at - start) as f32 / span as f32 * rect.width();
         let y = rect.bottom() - f32::from(sample.percent) / 100.0 * rect.height();
         let point = Pos2::new(x, y);
+        let color = if sample.charging == Some(true) { Color32::from_rgb(70, 155, 85) } else { accent };
         if let Some((at, pos)) = previous {
             if sample.at - at <= 600 {
-                painter.line_segment([pos, point], Stroke::new(2.0, accent));
+                painter.line_segment([pos, point], Stroke::new(2.0, color));
             }
         }
-        painter.circle_filled(point, 2.0, accent);
+        painter.circle_filled(point, 2.0, color);
         previous = Some((sample.at, point));
     }
     if previous.is_none() {
         painter.text(rect.center(), egui::Align2::CENTER_CENTER, "Waiting for data",
-            egui::FontId::proportional(12.0), Color32::GRAY);
+            egui::FontId::proportional(12.0), muted);
     }
 }
