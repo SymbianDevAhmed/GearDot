@@ -1,0 +1,29 @@
+name: Publish v0.1.0 Windows preview
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Verify and promote our successful Windows build
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=45709175463
+          source_commit=450509c920fbd2c1d602d884efbeea772394e0ea
+          test "$(gh run view "$run_id" --json conclusion --jq .conclusion)" = success
+          test "$(gh run view "$run_id" --json headSha --jq .headSha)" = "$source_commit"
+          gh run download "$run_id" --name G435Battery-windows-x64 --dir dist
+          test -s dist/g435-battery.exe
+          test -s dist/diagnostic.exe
+          (cd dist && zip G435Battery-windows-x64.zip g435-battery.exe diagnostic.exe)
+          gh release create v0.1.0             dist/g435-battery.exe             dist/diagnostic.exe             dist/G435Battery-windows-x64.zip             --target "$source_commit"             --title "G435 Battery Monitor v0.1.0"             --prerelease             --notes "First Windows x64 preview built from this repository. All four automated Rust tests passed. Download g435-battery.exe for the tray app or diagnostic.exe for a one-shot battery reading. Supports Logitech G435 LIGHTSPEED receiver 046D:0ADF. Battery percentage is estimated from voltage; final hardware/UI validation is pending."
+          gh release view v0.1.0 --json url,assets
