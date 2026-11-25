@@ -5,3 +5,5 @@ pub mod protocol;
 pub mod receiver;
 
 pub mod history;
+
+pub mod mouse;
