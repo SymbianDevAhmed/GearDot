@@ -1,0 +1,27 @@
+name: Build Windows EXE
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Rust stable
+        run: rustup default stable
+      - name: Run protocol and domain tests
+        run: cargo test --all-targets
+      - name: Build portable executables
+        run: cargo build --release --bins
+      - uses: actions/upload-artifact@v4
+        with:
+          name: G435Battery-windows-x64
+          path: |
+            target/release/g435-battery.exe
+            target/release/diagnostic.exe
+          if-no-files-found: error
