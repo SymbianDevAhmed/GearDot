@@ -1,4 +1,5 @@
 //! A compact native Windows taskbar indicator. No Explorer injection or hooks.
+use wireless_battery_monitor::preferences::WidgetOptions;
 use std::{cell::RefCell, ffi::c_void, mem::{size_of, zeroed}, ptr::{null, null_mut}};
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
@@ -21,10 +22,18 @@ pub struct WidgetReading {
     pub low_threshold: u8,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Layout {
+    x: i32, y: i32, w: i32, h: i32, dpi: u32, light: bool,
+    cell: i32, scale: u16, options: WidgetOptions, phase: bool, readings: [WidgetReading; 2],
+}
+
 struct WidgetState {
+    options: WidgetOptions,
+    phase: bool,
     readings: [WidgetReading; 2],
     shown: bool,
-    last_layout: Option<(i32, i32, i32, i32, u32, bool, [WidgetReading; 2])>,
+    last_layout: Option<Layout>,
     emit: Box<dyn Fn(WidgetEvent)>,
 }
 
@@ -38,9 +47,9 @@ fn wide(s: &str) -> Vec<u16> { s.encode_utf16().chain([0]).collect() }
 fn px(n: i32, dpi: u32) -> i32 { (n * dpi as i32 + 48) / 96 }
 
 impl TaskbarWidget {
-    pub fn new(emit: impl Fn(WidgetEvent) + 'static) -> Option<Self> {
+    pub fn new(options: WidgetOptions, emit: impl Fn(WidgetEvent) + 'static) -> Option<Self> {
         let mut state = Box::new(RefCell::new(WidgetState {
-            readings: [WidgetReading::default(); 2], shown: false, last_layout: None, emit: Box::new(emit),
+            options, phase: false, readings: [WidgetReading::default(); 2], shown: false, last_layout: None, emit: Box::new(emit),
         }));
         unsafe {
             let class = wide("G435BatteryTaskbarWidget");
@@ -69,9 +78,10 @@ impl TaskbarWidget {
         }
     }
 
-    pub fn set_readings(&mut self, readings: [WidgetReading; 2]) {
+    pub fn update(&mut self, readings: [WidgetReading; 2], options: WidgetOptions) {
         let mut state = self.state.borrow_mut();
         state.readings = readings;
+        state.options = options;
         unsafe { refresh_layout(self.hwnd, &mut state); }
     }
 }
@@ -103,7 +113,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
     }
     let Ok(mut state) = (*pointer).try_borrow_mut() else { return 0; };
     match msg {
-        WM_TIMER => { refresh_layout(hwnd, &mut state); 0 }
+        WM_TIMER => {
+            if state.options.animate && state.readings.iter().zip(state.options.visible).any(|(r, v)| v && r.charging && !r.full && !r.stale) {
+                state.phase = !state.phase;
+            } else { state.phase = false; }
+            refresh_layout(hwnd, &mut state); 0
+        }
         WM_LBUTTONUP => { (state.emit)(WidgetEvent::Details); 0 }
         WM_RBUTTONUP => { context_menu(hwnd, &state); 0 }
         WM_SETTINGCHANGE | WM_DISPLAYCHANGE | WM_DPICHANGED => {
@@ -185,7 +200,11 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
     }
     let dpi = GetDpiForWindow(taskbar).max(96);
     let h = bar.bottom - bar.top;
-    let w = px(144, dpi);
+    let visible_count = state.options.visible.iter().filter(|v| **v).count() as i32;
+    if visible_count == 0 { visibility(hwnd, state, false); return; }
+    let scale = state.options.scale.min(((h - px(4, dpi)).max(1) * 100 / px(18, dpi).max(1)) as u16).max(70);
+    let cell = px((72 * i32::from(scale) + 50) / 100, dpi);
+    let w = cell * visible_count;
     // Do not cover a hidden/vertical taskbar or a tray that cannot be located.
     let shown_height = bar.bottom.min(monitor.rcMonitor.bottom) - bar.top.max(monitor.rcMonitor.top);
     if h < px(20, dpi) || bar.right - bar.left < h * 4 ||
@@ -196,9 +215,10 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
     let x = notify.left - w - px(4, dpi);
     let y = bar.top;
     let light = light_taskbar();
-    let layout = (x, y, w, h, dpi, light, state.readings);
+    let layout = Layout { x, y, w, h, dpi, light, cell, scale, options: state.options,
+        phase: state.phase && state.options.animate, readings: state.readings };
     if state.last_layout != Some(layout) {
-        if !paint(hwnd, x, y, w, h, dpi, light, state.readings) {
+        if !paint(hwnd, layout) {
             visibility(hwnd, state, false); return;
         }
         state.last_layout = Some(layout);
@@ -207,8 +227,9 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
     SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
-unsafe fn paint(hwnd: HWND, x: i32, y: i32, width: i32, height: i32,
-    dpi: u32, light: bool, readings: [WidgetReading; 2]) -> bool {
+unsafe fn paint(hwnd: HWND, layout: Layout) -> bool {
+    let Layout { x, y, w: width, h: height, dpi, light, cell, scale, options, phase, readings } = layout;
+    let visible: Vec<usize> = (0..2).filter(|&i| options.visible[i]).collect();
     let dc = CreateCompatibleDC(null_mut());
     if dc.is_null() { return false; }
     let mut info: BITMAPINFO = zeroed();
@@ -229,17 +250,18 @@ unsafe fn paint(hwnd: HWND, x: i32, y: i32, width: i32, height: i32,
     std::slice::from_raw_parts_mut(bits.cast::<u32>(), count).fill(0);
     SetBkMode(dc, TRANSPARENT as i32);
     SetTextColor(dc, 0x00ff_ffff);
-    let pen = CreatePen(PS_SOLID, px(1, dpi).max(1), 0x00ff_ffff);
+    let pen = CreatePen(PS_SOLID, px((i32::from(scale) + 50) / 100, dpi).max(1), 0x00ff_ffff);
     let old_pen = SelectObject(dc, pen);
     let old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-    let top = (height - px(18, dpi)) / 2;
-    let s = |v| px(v, dpi);
+    let s = |v: i32| px((v * i32::from(scale) + 50) / 100, dpi);
+    let top = (height - s(18)) / 2;
     let font = CreateFontW(-s(13), 0, 0, 0, FW_NORMAL as i32, 0, 0, 0,
         DEFAULT_CHARSET as u32, OUT_DEFAULT_PRECIS as u32, CLIP_DEFAULT_PRECIS as u32,
         ANTIALIASED_QUALITY as u32, DEFAULT_PITCH as u32, wide("Segoe UI").as_ptr());
     let old_font = SelectObject(dc, font);
-    for (index, reading) in readings.iter().enumerate() {
-        let origin = s(72 * index as i32);
+    for (slot, &index) in visible.iter().enumerate() {
+        let reading = &readings[index];
+        let origin = cell * slot as i32;
         let left = origin + s(4);
         if index == 0 {
             // Headphone outline.
@@ -262,7 +284,7 @@ unsafe fn paint(hwnd: HWND, x: i32, y: i32, width: i32, height: i32,
         let text = wide(&if reading.full { "Full".into() }
             else if reading.charging { reading.level.map(|v| format!("{v}%⚡")).unwrap_or_else(|| "--%".into()) }
             else { reading.level.map(|v| format!("{}{}%", if reading.stale { "~" } else { "" }, v)).unwrap_or_else(|| "--%".into()) });
-        let mut rect = RECT { left: origin+s(25), top: 0, right: origin+s(72)-s(2), bottom: height };
+        let mut rect = RECT { left: origin+s(25), top: 0, right: origin+cell-s(2), bottom: height };
         DrawTextW(dc, text.as_ptr(), (text.len()-1) as i32, &mut rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
     SelectObject(dc, old_font);
@@ -274,14 +296,17 @@ unsafe fn paint(hwnd: HWND, x: i32, y: i32, width: i32, height: i32,
     // Per-device foreground colour so the headphones and mouse stay independent.
     let pixels = std::slice::from_raw_parts_mut(bits.cast::<u32>(), count);
     for (index, pixel) in pixels.iter_mut().enumerate() {
-        let reading = readings[((index % width as usize) >= s(72) as usize) as usize];
+        let slot = ((index % width as usize) / cell as usize).min(visible.len() - 1);
+        let reading = readings[visible[slot]];
         let rgb = if reading.stale || reading.level.is_none() {
             if light { (110u32, 110u32, 110u32) } else { (155, 155, 155) }
         } else if reading.charging || reading.full {
-            if light { (0, 115, 60) } else { (89, 210, 145) }
+            if reading.charging && !reading.full && phase {
+                if light { (0, 85, 45) } else { (154, 245, 184) }
+            } else if light { (0, 115, 60) } else { (89, 210, 145) }
         } else if reading.level.is_some_and(|v| v <= reading.low_threshold) {
             if light { (170, 25, 38) } else { (255, 126, 137) }
-        } else if light { (32, 32, 32) } else { (248, 248, 248) };
+        } else { options.accent.rgb(light) };
         let a = (*pixel & 0xff).max(1);
         let r = rgb.0 * a / 255;
         let g = rgb.1 * a / 255;
