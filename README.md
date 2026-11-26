@@ -35,7 +35,7 @@ Both readings appear side by side next to the Windows notification area, using a
 ## ✨ Key Features
 
 - **Overview:** a tray-launched overview with original device glyphs and battery rings, sorted lowest first. USB devices link to their history.
-- **Screen-edge rings:** enable the optional right-edge widget in **Settings → Appearance**. It uses the selected screen, hides for fullscreen apps, and keeps the tray icon available.
+- **Screen-edge slider:** hover the slim handle on the right edge to reveal battery rings. It is enabled by default, works alongside the taskbar indicators, and hides during fullscreen use. Manage it in **Settings → Appearance**. Bluetooth rings use the levels reported by Windows.
 - **Connect notifications:** opt in to show a fresh percentage when a supported USB device becomes available again.
 - **Bluetooth preview:** Overview reads battery percentages already cached by Windows on present Bluetooth device nodes. This path sends no Bluetooth requests and uses no vendor protocol. A single cached percentage does not establish earbud-side percentages, charging, or case battery.
 - **Demo:** launch the executable with `--demo` for a read-only Overview with illustrative data.
