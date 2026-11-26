@@ -128,7 +128,7 @@ jobs:
         run: |
           rustup default stable
           rustup component add rustfmt clippy
-          if (-not (Test-Path Cargo.lock)) { cargo generate-lockfile }
+          cargo update --workspace
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo fmt --all
       - name: Verify formatting and locked tests
