@@ -27,6 +27,11 @@ Both readings appear side by side next to the Windows notification area, using a
 
 ---
 
+<p align="center">
+  <a href="https://github.com/SymbianDevAhmed/Wireless-Battery-Monitor/actions/workflows/build.yml"><img src="https://github.com/SymbianDevAhmed/Wireless-Battery-Monitor/actions/workflows/build.yml/badge.svg?branch=main" alt="Build and tests"/></a>
+  <a href="CHANGELOG.md">Changelog</a> · <a href="ROADMAP.md">Roadmap</a> · <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
 ## ✨ Key Features
 
 > **Development update:** the options below are implemented on main for the next release. The latest downloadable stable build remains v1.0.0 until the owner approves publication.
@@ -46,6 +51,11 @@ Both readings appear side by side next to the Windows notification area, using a
 - 💤 **Sleep Handling** — Briefly retain the mouse's last reading, marked with a tilde and muted colour, when it stops responding; show an unavailable value after the grace period.
 - 📈 **Battery History** — Choose a 3/6/12/24/48-hour chart, view min/max/net change, and obtain a regression-based remaining-time estimate only when sufficient uninterrupted discharge data is available.
 - 🛡️ **Privacy** — Keep readings locally; no telemetry, external service, or firmware changes.
+- 🧪 **Diagnostics & Test Notification** — Bounded local log files, a notification test and a shortcut to the data folder.
+- 🗂️ **Settings Backup** — Export saved preferences and load a local backup without automatically changing Windows startup.
+- 🏷️ **Custom Device Names** — Personal labels preserve the underlying hardware identity.
+- ℹ️ **About & Updates** — Original emblem, app version, developer identity and an authenticated-browser link to GitHub Releases (no stored credential or automatic update).
+- 📦 **Installer** — Per-user Inno Setup installer source with shortcuts and uninstallation; packaged only when a release is explicitly approved.
 - 🎨 **Original App Icon** — A custom headset, mouse and charge emblem, embedded in the Windows executable and details window.
 - 📦 **Portable EXE** — Run without installing Rust, .NET or G HUB.
 
@@ -93,6 +103,23 @@ The application uses Rust, Cargo, `hidapi`, `windows-sys`, `winit`, `tray-icon`,
 
 ---
 
+## 🏗️ Architecture
+
+```mermaid
+flowchart TD
+    A["Monitor / Diagnostic"] --> B["Device factory"]
+    B --> C["G435 adapter"]
+    B --> D["MAD R adapter"]
+    C --> E["BatterySource / BatteryReading"]
+    D --> E
+    E --> F["Alert policy & history"]
+    F --> G["Native widget / Details"]
+    H["Local settings"] --> F
+    H --> G
+```
+
+The adapters implement the Strategy-style BatterySource interface; the shared device factory constructs a model-specific adapter. Typed results, local state and event messages keep hardware queries independent of presentation. See [device support](docs/DEVICE_SUPPORT.md).
+
 ## 📂 Project Structure
 
 ```text
@@ -105,6 +132,8 @@ Wireless-Battery-Monitor/
 │   ├── app.rs
 │   ├── battery.rs
 │   ├── details.rs
+│   ├── devices.rs
+│   ├── diagnostics.rs
 │   ├── history.rs
 │   ├── icon.rs
 │   ├── lib.rs
@@ -122,6 +151,14 @@ Wireless-Battery-Monitor/
 ├── BUILD.cmd
 ├── assets/
 │   └── icon.svg
+├── docs/
+│   └── DEVICE_SUPPORT.md
+├── installer/
+│   ├── README.md
+│   └── setup.iss
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── ROADMAP.md
 ├── build.rs
 ├── Cargo.toml
 ├── THIRD-PARTY-NOTICES.txt
@@ -139,6 +176,8 @@ Wireless-Battery-Monitor/
 | `app.rs` | Application lifecycle, independent polling and actions |
 | `preferences.rs` | Validated settings, live device state and notification policy |
 | `runtime.rs` | Windows startup preference, single-instance guard and native notifications |
+| `devices.rs` | Shared device adapter factory |
+| `diagnostics.rs` | Bounded local monitor and UI event logs |
 | `details.rs` | Device selector, battery chart and details card |
 | `icon.rs` | System tray fallback icon |
 | `diagnostic.rs` | One-shot console reading for both supported devices |
@@ -156,6 +195,10 @@ Wireless-Battery-Monitor/
 
 Click the widget to open battery details. Right-click to refresh or exit. When the taskbar layout cannot be located, the standard notification-area icon remains available with both device statuses. The fallback may appear under the Windows hidden-icons arrow.
 
+### Portable and Installer
+
+The current released EXE remains portable. The next release will additionally include the Windows Setup executable, with optional desktop shortcut, per-user installation and uninstaller. See [installer details](installer/README.md). No setup executable has been packaged during this development stage.
+
 ### Settings and Charging
 
 Right-click the taskbar widget and select **Settings**, or open the details card and choose the Settings tab. Save changes to apply them within two seconds. Start with Windows is opt-in; keep the EXE in a permanent location and re-enable the setting after moving it. Settings are written to `%LOCALAPPDATA%\G435Battery\settings.json`.
@@ -164,13 +207,15 @@ The MAD R widget indicates charging with a green percentage and charging symbol,
 
 Both devices reconnect automatically, with independent 15-second retries while unavailable. Device visibility, widget size and colour, charging animation, history period and window theme are adjustable from Settings. Old readings are marked stale and do not trigger alerts. The monitor prevents duplicate monitor instances in the same session.
 
+The About page contains the app identity and a browser link to GitHub Releases; since this repository is private, it does not perform an unauthenticated update request or store a token. Test notifications and the data-folder button help troubleshoot, while a settings backup can be loaded as an unsaved draft.
+
 ### Build from Source
 
 Prerequisites: Windows 10/11 x64, the [Rust stable toolchain](https://rustup.rs/), and the Microsoft Visual C++ build tools.
 
 ```powershell
-cargo test --all-targets
-cargo build --release --bins
+cargo test --locked --all-targets
+cargo build --locked --release --bins
 ```
 
 The executable is `target\release\wireless-battery-monitor.exe`. Run `target\release\diagnostic.exe` for one-shot readings. Alternatively, double-click `BUILD.cmd`.
@@ -179,11 +224,15 @@ The executable is `target\release\wireless-battery-monitor.exe`. Run `target\rel
 
 ## 🧪 Testing
 
-### Automated Protocol Tests
+### Automated Protocol & Quality Checks
 
 ```bash
-cargo test --all-targets
+cargo fmt --all -- --check
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets
 ```
+
+Cargo.lock records the resolved dependency graph. Push CI runs checks only; a separately selected release workflow builds the portable app and installer after tests pass.
 
 The tests check:
 
@@ -204,9 +253,19 @@ MAD R support is based on the documented battery-report format; the owner report
 
 ---
 
+## 🗃️ Project Documentation
+
+- [CHANGELOG](CHANGELOG.md) — release history and unreleased features.
+- [ROADMAP](ROADMAP.md) — planned and implemented improvements.
+- [CONTRIBUTING](CONTRIBUTING.md) — development guidelines.
+- [Device Support](docs/DEVICE_SUPPORT.md) — hardware and architecture.
+- [Installer](installer/README.md) — packaging and validation.
+
+Current-release screenshots should be captured on real Windows hardware after the next build; no illustrative mockup is presented as a genuine screenshot.
+
 ## 📈 Battery Interpretation & Data
 
-- Settings and the most recent live reading are stored locally. Start with Windows uses the standard current-user startup setting only when enabled by the user.
+- Settings, settings-backup.json, monitor.log, ui.log and the most recent live reading are stored locally. Logs rotate at about 256 KiB per file. Start with Windows uses the standard current-user startup setting only when enabled by the user.
 
 - The G435 percentage is an estimate from cell voltage and can vary with charging and load.
 - MAD R reports its own percentage and charging flag; this is not calculated from the voltage curve.
