@@ -79,7 +79,7 @@ jobs:
               throw "Monitor exited during the startup check. Exit code: $($monitor.ExitCode)"
             }
             $log = Get-Content (Join-Path $folder 'data/monitor.log') -Raw
-            if ($log -notmatch '\[device\]' -or $log -notmatch '\[bluetooth\]') {
+            if ($log -notmatch '\[device\]' -or $log -notmatch '\[bluetooth\] Connected-device probe responded') {
               throw 'Monitor did not complete its first USB and Bluetooth checks.'
             }
             if ($log -match '\[(panic|runtime-error)\]') {
