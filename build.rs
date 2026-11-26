@@ -46,11 +46,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(&icon_path, ico)?;
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let path = icon_path.to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid icon path"))?;
-        winresource::WindowsResource::new()
-            .set_icon(path)
-            .set("ProductName", "Wireless Battery Monitor")
-            .set("FileDescription", "Wireless Battery Monitor")
-            .compile()?;
+        let version = format!("{}.{}", env!("CARGO_PKG_VERSION"), 0);
+        for (binary, description) in [
+            ("wireless-battery-monitor", "Wireless Peripheral Battery Monitor"),
+            ("diagnostic", "Wireless Battery Monitor Diagnostic"),
+        ] {
+            let resource_dir = out.join(format!("resource-{binary}"));
+            fs::create_dir_all(&resource_dir)?;
+            let resource_dir = resource_dir.to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid resource directory"))?;
+            winresource::WindowsResource::new()
+                .set_output_directory(resource_dir)
+                .set_icon(path)
+                .set("ProductName", "Wireless Battery Monitor")
+                .set("FileDescription", description)
+                .set("CompanyName", "Ahmed Gaber")
+                .set("LegalCopyright", "Copyright (c) 2026 Ahmed Gaber")
+                .set("OriginalFilename", &format!("{binary}.exe"))
+                .set("InternalName", binary)
+                .set("FileVersion", &version)
+                .set("ProductVersion", &version)
+                .compile_for(binary)?;
+        }
     }
     Ok(())
 }
