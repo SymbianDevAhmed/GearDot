@@ -18,6 +18,10 @@ on:
         description: Publish stable release after tests pass
         type: boolean
         default: false
+      package_private:
+        description: Build private Portable and Installer artifacts (do not publish a release)
+        type: boolean
+        default: false
       prepare_sources:
         description: Generate lockfile and format source (no executable or release)
         type: boolean
@@ -58,10 +62,10 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --locked --all-targets
       - name: Build portable executables
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
         run: cargo build --locked --release --bins
       - name: Package Windows installer
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -75,11 +79,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item target/release-package -ItemType Directory -Force | Out-Null
           Copy-Item target/release/wireless-battery-monitor.exe,target/release/diagnostic.exe,target/installer/WirelessBatteryMonitor-Setup-x64.exe target/release-package/
+          $portable = "target/portable-files"
+          New-Item $portable -ItemType Directory -Force | Out-Null
+          Copy-Item target/release/wireless-battery-monitor.exe,target/release/diagnostic.exe,THIRD-PARTY-NOTICES.txt $portable
+          Copy-Item installer/PORTABLE.txt "$portable/README.txt"
+          Set-Content "$portable/portable.flag" "Portable mode" -Encoding ascii
+          Compress-Archive -Path "$portable/*" -DestinationPath target/release-package/WirelessBatteryMonitor-Portable.zip -Force
+          $hashes = Get-ChildItem target/release-package -File | Sort-Object Name | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          }
+          [IO.File]::WriteAllText((Join-Path (Get-Location).Path "target/release-package/SHA256SUMS.txt"), ($hashes -join "`n") + "`n", [Text.Encoding]::ASCII)
       - uses: actions/upload-artifact@v6
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
         with:
           name: WirelessBatteryMonitor-windows-x64
-          path: target/release-package/*.exe
+          path: target/release-package/
           if-no-files-found: error
 
   publish:
@@ -100,12 +114,11 @@ jobs:
           VERSION: ${{ needs.windows.outputs.version }}
         run: |
           cd dist
-          zip WirelessBatteryMonitor-windows-x64.zip wireless-battery-monitor.exe diagnostic.exe
-          sha256sum wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-windows-x64.zip WirelessBatteryMonitor-Setup-x64.exe > SHA256SUMS.txt
-          gh release create "v$VERSION" wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-windows-x64.zip WirelessBatteryMonitor-Setup-x64.exe SHA256SUMS.txt --target "$GITHUB_SHA" --title "Wireless Battery Monitor v$VERSION" --latest --notes "Windows x64 release. Persistent settings, optional sign-in startup, independent reconnection, single-instance handling, native low-battery and charge-complete notifications, MAD R charging/full status, per-device visibility, customised widget size and colour, charging animation, window themes, enhanced analytics, About, notification test, local logs, settings backups and Windows installer. Automated Rust tests passed. G435 charging state remains unavailable; its percentage is a voltage-based estimate."
+          sha256sum -c SHA256SUMS.txt
+          gh release create "v$VERSION" wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-Portable.zip WirelessBatteryMonitor-Setup-x64.exe SHA256SUMS.txt --target "$GITHUB_SHA" --title "Wireless Battery Monitor v$VERSION" --latest --notes "Windows x64 release. Persistent settings, optional sign-in startup, independent reconnection, single-instance handling, native low-battery and charge-complete notifications, MAD R charging/full status, per-device visibility, customised widget size and colour, charging animation, window themes, enhanced analytics, About, notification test, local logs, settings backups, battery profiles, power saving, sleep/wake recovery, taskbar selection, CSV export and Windows installer. Automated Rust tests passed. G435 charging state remains unavailable; its percentage is a voltage-based estimate."
 
   prepare:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.prepare_sources && !inputs.publish_release
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.prepare_sources && !inputs.publish_release && !inputs.package_private
     runs-on: windows-latest
     permissions:
       contents: write
