@@ -7,9 +7,9 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-cargo test --all-targets
+cargo test --locked --all-targets
 if errorlevel 1 goto failed
-cargo build --release --bins
+cargo build --locked --release --bins
 if errorlevel 1 goto failed
 echo Build complete: target\release\wireless-battery-monitor.exe
 pause
