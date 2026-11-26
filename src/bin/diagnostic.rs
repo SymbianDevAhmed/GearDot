@@ -1,9 +1,7 @@
 #[cfg(windows)]
 fn main() -> std::process::ExitCode {
-    use wireless_battery_monitor::{battery::{BatterySource, DeviceKind}, receiver::G435Receiver, mouse::MadRReceiver};
-    let mut headset = G435Receiver::new();
-    let mut mouse = MadRReceiver;
-    let results = [headset.read_battery(), mouse.read_battery()];
+    use wireless_battery_monitor::{battery::DeviceKind, devices};
+    let results = DeviceKind::ALL.map(devices::read);
     let mut success = false;
     for (kind, result) in DeviceKind::ALL.into_iter().zip(results) {
         match result {
