@@ -1,0 +1,21 @@
+Wireless Battery Monitor - Portable edition (Windows x64)
+=======================================================
+
+Extract the entire ZIP into a writable folder before launching the EXE.
+Keep portable.flag next to wireless-battery-monitor.exe.
+
+Run wireless-battery-monitor.exe. The application creates a local data
+folder for settings, history, backups and diagnostic logs. You can move
+the entire folder to another computer. Do not run two editions at once.
+The portable edition never registers itself for Windows startup.
+
+The standalone EXE without portable.flag uses the usual local Windows
+user data directory. For an installed edition with shortcuts and
+uninstallation, use WirelessBatteryMonitor-Setup-x64.exe instead.
+
+No internet connection is required to monitor supported devices.
+The repository is private; the About link is available to authorised
+users. G435 battery percentage is an estimate from voltage, not a confirmed
+charging state. MAD R reports its percentage and charge flag.
+
+Developer: Ahmed Gaber
