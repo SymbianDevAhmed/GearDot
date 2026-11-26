@@ -100,7 +100,7 @@ fn draw_device_card(ui: &mut egui::Ui, card: &DeviceCard) -> bool {
     egui::Frame::new().fill(fill).corner_radius(7).inner_margin(10).show(ui, |ui| {
         ui.horizontal(|ui| {
             let (response, painter) = ui.allocate_painter(Vec2::splat(29.0), egui::Sense::hover());
-            device_glyph(&painter, response.rect.center(), card.kind, ui.visuals().strong_text_color(), fill);
+            device_glyph(&painter, response.rect.center(), card.kind, ui.visuals().text_color(), fill);
             ui.vertical(|ui| {
                 ui.set_min_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -142,7 +142,7 @@ impl DetailsCard {
         let refresh = ui.horizontal(|ui| {
             ui.heading(if self.demo { "Device preview" } else { "Devices" });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let accent = if ui.visuals().dark_mode { Color32::from_rgb(104, 201, 195) } else { Color32::from_rgb(19, 116, 111) };
+                let accent = if ui.visuals().dark_mode { Color32::from_rgb(242, 193, 78) } else { Color32::from_rgb(128, 81, 12) };
                 !self.demo && ui.add(egui::Button::new(egui::RichText::new("↻").size(17.0).color(ui.visuals().panel_fill))
                     .fill(accent)).on_hover_text("Refresh batteries").clicked()
             }).inner
@@ -176,7 +176,7 @@ impl DetailsCard {
         let dark = ui.visuals().dark_mode;
         let low = if dark { Color32::from_rgb(255, 129, 113) } else { Color32::from_rgb(164, 40, 27) };
         let good = if dark { Color32::from_rgb(110, 219, 174) } else { Color32::from_rgb(0, 111, 78) };
-        let normal = if dark { Color32::from_rgb(104, 201, 195) } else { Color32::from_rgb(19, 116, 111) };
+        let normal = if dark { Color32::from_rgb(242, 193, 78) } else { Color32::from_rgb(128, 81, 12) };
         let muted = ui.visuals().weak_text_color();
         let mut cards = Vec::new();
         for (index, kind) in DeviceKind::ALL.into_iter().enumerate() {
