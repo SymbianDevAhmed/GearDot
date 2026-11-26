@@ -9,3 +9,8 @@ pub mod history;
 pub mod mouse;
 
 pub mod preferences;
+
+#[cfg(windows)]
+pub mod devices;
+
+pub mod diagnostics;
