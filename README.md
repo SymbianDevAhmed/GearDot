@@ -34,6 +34,12 @@ Both readings appear side by side next to the Windows notification area, using a
 
 ## ✨ Key Features
 
+- **Overview:** a tray-launched overview with original device glyphs and battery rings, sorted lowest first. USB devices link to their history.
+- **Screen-edge rings:** enable the optional right-edge widget in **Settings → Appearance**. It uses the selected screen, hides for fullscreen apps, and keeps the tray icon available.
+- **Connect notifications:** opt in to show a fresh percentage when a supported USB device becomes available again.
+- **Bluetooth preview:** Overview reads battery percentages already cached by Windows on present Bluetooth device nodes. This path sends no Bluetooth requests and uses no vendor protocol. A single cached percentage does not establish earbud-side percentages, charging, or case battery.
+- **Demo:** launch the executable with `--demo` for a read-only Overview with illustrative data.
+
 > **Development update:** the options below are implemented on main for the next release. The latest downloadable stable build remains v1.0.0 until the owner approves publication.
 
 - 🎧 **Headset Battery** — Read Logitech G435 voltage through its LIGHTSPEED receiver and display an approximate percentage.
