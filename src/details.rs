@@ -72,6 +72,13 @@ fn device_glyph(painter: &egui::Painter, center: Pos2, kind: &str, colour: Color
                 painter.rect_filled(Rect::from_center_size(point(x, 3.0), Vec2::new(4.0, 8.0)), 1.5, colour);
             }
         }
+        "Earbuds" => {
+            for x in [-5.25, 5.25] {
+                painter.circle_stroke(point(x, -4.5), 3.6, stroke);
+                painter.line_segment([point(x, -1.0), point(x, 6.5)], stroke);
+                painter.circle_filled(point(x, 6.5), 1.0, colour);
+            }
+        }
         "Mouse" => {
             painter.rect_stroke(Rect::from_center_size(center, Vec2::new(13.0, 19.0)), 6.0, stroke, egui::StrokeKind::Inside);
             painter.line_segment([point(0.0,-6.0), point(0.0,-1.0)], stroke);
@@ -172,13 +179,18 @@ impl DetailsCard {
                 approximate: reading.estimated || reading.stale });
         }
         for reading in &self.bluetooth {
-            cards.push(DeviceCard { name: reading.name.clone(), kind: "Bluetooth", level: Some(reading.percent),
+            let name = reading.name.to_ascii_lowercase();
+            let kind = if name.contains("mouse") || name.contains("cd23") { "Mouse" }
+                else if ["freearc", "freebuds", "k20i", "life p2 mini", "earbud"].iter().any(|model| name.contains(*model)) { "Earbuds" }
+                else if name.contains("headset") || name.contains("headphone") { "Headset" }
+                else { "Bluetooth" };
+            cards.push(DeviceCard { name: reading.name.clone(), kind, level: Some(reading.percent),
                 status: "Bluetooth · Windows cached reading".into(),
                 colour: if reading.percent <= self.original.low_threshold { low } else { good },
                 detail: None, approximate: false });
         }
         if self.demo {
-            cards.push(DeviceCard { name: "Bluetooth earbuds (sample)".into(), kind: "Bluetooth",
+            cards.push(DeviceCard { name: "Bluetooth earbuds (sample)".into(), kind: "Earbuds",
                 level: Some(46), status: "Bluetooth · Sample reading".into(), colour: good, detail: None, approximate: false });
         }
         cards.sort_by_key(|card| card.level.unwrap_or(u8::MAX));
