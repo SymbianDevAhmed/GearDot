@@ -55,7 +55,13 @@ Both readings appear side by side next to the Windows notification area, using a
 - 🗂️ **Settings Backup** — Export saved preferences and load a local backup without automatically changing Windows startup.
 - 🏷️ **Custom Device Names** — Personal labels preserve the underlying hardware identity.
 - ℹ️ **About & Updates** — Original emblem, app version, developer identity and an authenticated-browser link to GitHub Releases (no stored credential or automatic update).
-- 📦 **Installer** — Per-user Inno Setup installer source with shortcuts and uninstallation; packaged only when a release is explicitly approved.
+- 🔋 **Power Saving Mode** — Background polling at least 120s, reconnect retries at 45s, slower layout checks and no animation; charging still refreshes at most every 30s.
+- 💤 **Sleep & Wake Recovery** — Invalidate in-flight readings across suspension and refresh promptly after resume.
+- 🎛️ **Device Profiles** — Optional independent refresh intervals and low battery thresholds; MAD R full alerts are configurable per device.
+- 🖥️ **Multi-Monitor & Position** — Select the primary/secondary Windows taskbar and adjust the offset near the notification area; fall back safely when unavailable.
+- 🧾 **CSV Export** — Export recorded history with timestamps, percentages, voltages and available charging flags.
+- 🔔 **Notification Sound** — Optional sound setting, subject to Windows notification preferences.
+- 📦 **Installer & Portable** — Per-user Inno Setup installer with shortcuts/uninstallation, and a portable ZIP storing data next to the EXE. Private packages are available through explicitly requested GitHub Actions runs.
 - 🎨 **Original App Icon** — A custom headset, mouse and charge emblem, embedded in the Windows executable and details window.
 - 📦 **Portable EXE** — Run without installing Rust, .NET or G HUB.
 
@@ -155,6 +161,7 @@ Wireless-Battery-Monitor/
 │   └── DEVICE_SUPPORT.md
 ├── installer/
 │   ├── README.md
+│   ├── PORTABLE.txt
 │   └── setup.iss
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
@@ -197,15 +204,22 @@ Click the widget to open battery details. Right-click to refresh or exit. When t
 
 ### Portable and Installer
 
-The current released EXE remains portable. The next release will additionally include the Windows Setup executable, with optional desktop shortcut, per-user installation and uninstaller. See [installer details](installer/README.md). No setup executable has been packaged during this development stage.
+The latest published repository release remains v1.0.0. Development builds are prepared privately in GitHub Actions without publishing a new Release.
+
+- **Portable ZIP:** extract all files into a writable folder; retain `portable.flag`. The monitor stores preferences, CSV history, backups and logs in a `data/` folder beside the EXE, and does not register Windows startup.
+- **Installer:** install per user with Start menu shortcuts, optional desktop shortcut and uninstaller. Normal app data remains in `%LOCALAPPDATA%\G435Battery`; Start with Windows is an explicit opt-in.
+- **Standalone EXE:** without `portable.flag`, it uses standard Windows local data, like the installed edition.
+- **SHA256SUMS.txt:** verifies the distributed files. Share the files directly with trusted friends when ready; repository access is not needed to run the software.
+
+See [installer details](installer/README.md).
 
 ### Settings and Charging
 
-Right-click the taskbar widget and select **Settings**, or open the details card and choose the Settings tab. Save changes to apply them within two seconds. Start with Windows is opt-in; keep the EXE in a permanent location and re-enable the setting after moving it. Settings are written to `%LOCALAPPDATA%\G435Battery\settings.json`.
+Right-click the taskbar widget and select **Settings**, or open the details card and choose the Settings tab. Save changes to apply them during the next settings check (normally two seconds, up to five seconds in Power Saving Mode). Start with Windows is opt-in; keep the EXE in a permanent location and re-enable the setting after moving it. Settings are written to `%LOCALAPPDATA%\G435Battery\settings.json`.
 
 The MAD R widget indicates charging with a green percentage and charging symbol, then displays **Full** when the mouse reports 100%. A single completion alert is emitted after a known charging session; Windows notification settings may suppress the notification. G435 still only reports battery voltage: an estimated 100% is explicitly labelled as an estimate in the details card, not verified charge completion.
 
-Both devices reconnect automatically, with independent 15-second retries while unavailable. Device visibility, widget size and colour, charging animation, history period and window theme are adjustable from Settings. Old readings are marked stale and do not trigger alerts. The monitor prevents duplicate monitor instances in the same session.
+Both devices reconnect automatically, with independent 15-second retries while unavailable (45 seconds in Power Saving Mode). Device visibility, widget size and colour, charging animation, history period and window theme are adjustable from Settings. Old readings are marked stale and do not trigger alerts. The monitor prevents duplicate monitor instances in the same session.
 
 The About page contains the app identity and a browser link to GitHub Releases; since this repository is private, it does not perform an unauthenticated update request or store a token. Test notifications and the data-folder button help troubleshoot, while a settings backup can be loaded as an unsaved draft.
 
@@ -232,7 +246,7 @@ cargo test --locked --all-targets
 cargo clippy --locked --all-targets
 ```
 
-Cargo.lock records the resolved dependency graph. Push CI runs checks only; a separately selected release workflow builds the portable app and installer after tests pass.
+Cargo.lock records the resolved dependency graph. Push CI runs checks only. A separately selected private-package workflow builds both editions without a GitHub Release; explicit release publication is independent.
 
 The tests check:
 
@@ -265,7 +279,7 @@ Current-release screenshots should be captured on real Windows hardware after th
 
 ## 📈 Battery Interpretation & Data
 
-- Settings, settings-backup.json, monitor.log, ui.log and the most recent live reading are stored locally. Logs rotate at about 256 KiB per file. Start with Windows uses the standard current-user startup setting only when enabled by the user.
+- Settings, settings-backup.json, monitor.log, ui.log and the most recent live reading are stored locally. Portable mode keeps these files under its own data folder. Logs rotate at about 256 KiB per file. Start with Windows uses the standard current-user startup setting only when enabled by the user.
 
 - The G435 percentage is an estimate from cell voltage and can vary with charging and load.
 - MAD R reports its own percentage and charging flag; this is not calculated from the voltage curve.
@@ -287,6 +301,7 @@ Current-release screenshots should be captured on real Windows hardware after th
 
 ## 🔗 Technical References
 
+- [Windows power resume event](https://learn.microsoft.com/en-us/windows/win32/power/pbt-apmresumeautomatic).
 - [Windows notification area API](https://learn.microsoft.com/windows/win32/api/shellapi/ns-shellapi-notifyicondataw) and [Windows sign-in startup](https://learn.microsoft.com/windows/win32/setupapi/run-and-runonce-registry-keys).
 
 - [Windows resource embedding](https://docs.rs/winresource/) and [SVG rendering](https://docs.rs/resvg/) — the original vector icon is rendered during the build.
