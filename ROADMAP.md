@@ -8,6 +8,7 @@
 | Settings, startup, independent reconnect and alerts | Implemented on main |
 | Device visibility, appearance, charge/full status and analytics | Implemented on main |
 | About, notification test, diagnostic logs, backup, custom names | Implemented on main |
+| Portable local data, private package builds, power saving, profiles, wake recovery and CSV export | Implemented on main |
 | Windows installer source and executable metadata | Implemented; installer smoke test pending |
 | Signed Windows release | Future; requires trusted signing identity |
 | Additional device adapters | Future; requires model-specific evidence |
