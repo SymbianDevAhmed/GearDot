@@ -40,6 +40,8 @@ Both readings appear side by side next to the Windows notification area, using a
 - **Bluetooth preview:** Overview reads battery percentages already cached by Windows on present Bluetooth device nodes. This path sends no Bluetooth requests and uses no vendor protocol. A single cached percentage does not establish earbud-side percentages, charging, or case battery.
 - **Demo:** launch the executable with `--demo` for a read-only Overview with illustrative data.
 
+The Windows Settings readings supplied for the first hardware check cover **HUAWEI FreeArc**, **HUAWEI FreeBuds 6i**, **soundcore K20i**, **Soundcore Life P2 Mini**, and **HUAWEI MOUSE CD23**. The app reads the current cached value at runtime. Verify each device individually by comparing Overview to Windows Bluetooth settings when connected.
+
 > **Development update:** the options below are implemented on main for the next release. The latest downloadable stable build remains v1.0.0 until the owner approves publication.
 
 - 🎧 **Headset Battery** — Read Logitech G435 voltage through its LIGHTSPEED receiver and display an approximate percentage.
