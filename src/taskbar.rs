@@ -448,7 +448,7 @@ unsafe fn paint(hwnd: HWND, layout: &Layout) -> bool {
             let center = height / 2;
             let rounded = (y - center).abs() < height / 2 - px(3, dpi)
                 || x >= px(3, dpi);
-            *pixel = if rounded { 0xff_68c9c3 } else { 0 };
+            *pixel = if rounded { 0xff_f2c14e } else { 0 };
             continue;
         }
         if *pixel == 0 { continue; }
@@ -463,7 +463,7 @@ unsafe fn paint(hwnd: HWND, layout: &Layout) -> bool {
         } else if reading.level.is_some_and(|v| v <= reading.low_threshold) {
             if light { (170, 25, 38) } else { (255, 126, 137) }
         } else if edge && options.accent == wireless_battery_monitor::preferences::Accent::System {
-            (104, 201, 195)
+            (242, 193, 78)
         } else { options.accent.rgb(light) };
         if edge {
             let ring = (*pixel & 0x00ff_ffff) == 0x00ff_0000;
