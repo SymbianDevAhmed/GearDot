@@ -3,13 +3,13 @@
 #[cfg(windows)]
 mod app;
 #[cfg(windows)]
-mod details;
+mod taskbar;
 #[cfg(windows)]
 mod icon;
 #[cfg(windows)]
-mod runtime;
+mod details;
 #[cfg(windows)]
-mod taskbar;
+mod runtime;
 
 #[cfg(windows)]
 fn main() {
@@ -17,20 +17,13 @@ fn main() {
     let window = settings || std::env::args().any(|arg| arg == "--details");
     let result: Result<(), Box<dyn std::error::Error>> = (|| {
         // Separate mutexes permit one monitor and one details/settings window.
-        let Some(_guard) = runtime::InstanceGuard::acquire(window)? else {
-            return Ok(());
-        };
-        if window {
-            details::show(settings)
-        } else {
-            app::TrayApp::run()
-        }
+        let Some(_guard) = runtime::InstanceGuard::acquire(window)? else { return Ok(()); };
+        if window { details::show(settings) } else { app::TrayApp::run() }
     })();
     if let Err(error) = result {
         eprintln!("{error}");
         // Release builds have no console; preserve a readable local startup log.
-        if let Some(path) = std::env::var_os("LOCALAPPDATA") {
-            let dir = std::path::PathBuf::from(path).join("G435Battery");
+        if let Ok(dir) = wireless_battery_monitor::preferences::data_dir() {
             let _ = std::fs::create_dir_all(&dir);
             let _ = std::fs::write(dir.join("startup-error.txt"), error.to_string());
         }
