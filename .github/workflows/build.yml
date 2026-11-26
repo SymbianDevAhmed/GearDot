@@ -64,6 +64,32 @@ jobs:
       - name: Build portable executables
         if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
         run: cargo build --locked --release --bins
+      - name: Verify the Windows monitor stays running
+        if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $env:RUNNER_TEMP 'wbm-runtime-check'
+          New-Item $folder -ItemType Directory -Force | Out-Null
+          $exe = Join-Path $folder 'wireless-battery-monitor.exe'
+          Copy-Item target/release/wireless-battery-monitor.exe $exe
+          New-Item (Join-Path $folder 'portable.flag') -ItemType File -Force | Out-Null
+          $monitor = Start-Process -FilePath $exe -PassThru
+          try {
+            if ($monitor.WaitForExit(20000)) {
+              throw "Monitor exited during the startup check. Exit code: $($monitor.ExitCode)"
+            }
+            $log = Get-Content (Join-Path $folder 'data/monitor.log') -Raw
+            if ($log -notmatch '\[device\]' -or $log -notmatch '\[bluetooth\]') {
+              throw 'Monitor did not complete its first USB and Bluetooth checks.'
+            }
+            if ($log -match '\[(panic|runtime-error)\]') {
+              throw 'Monitor logged a panic or a runtime error.'
+            }
+          } finally {
+            $logFile = Join-Path $folder 'data/monitor.log'
+            if (Test-Path $logFile) { Get-Content $logFile }
+            if (!$monitor.HasExited) { Stop-Process -Id $monitor.Id }
+          }
       - name: Package Windows installer
         if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
         env:
