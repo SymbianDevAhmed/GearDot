@@ -5,13 +5,13 @@ mod app;
 #[cfg(windows)]
 mod bluetooth;
 #[cfg(windows)]
-mod taskbar;
+mod details;
 #[cfg(windows)]
 mod icon;
 #[cfg(windows)]
-mod details;
-#[cfg(windows)]
 mod runtime;
+#[cfg(windows)]
+mod taskbar;
 
 #[cfg(windows)]
 fn main() {
@@ -19,7 +19,10 @@ fn main() {
 
     let probe = std::env::args().any(|arg| arg == "--bluetooth-probe");
     std::panic::set_hook(Box::new(move |panic| {
-        let _ = Log::Monitor.event(if probe { "bluetooth-panic" } else { "panic" }, &panic.to_string());
+        let _ = Log::Monitor.event(
+            if probe { "bluetooth-panic" } else { "panic" },
+            &panic.to_string(),
+        );
     }));
     if probe {
         if let Err(error) = bluetooth::write_probe_response() {
@@ -33,8 +36,14 @@ fn main() {
     let window = demo || settings || std::env::args().any(|arg| arg == "--details");
     let result: Result<(), Box<dyn std::error::Error>> = (|| {
         // Separate mutexes permit one monitor and one details/settings window.
-        let Some(_guard) = runtime::InstanceGuard::acquire(window)? else { return Ok(()); };
-        if window { details::show(settings, demo) } else { app::TrayApp::run() }
+        let Some(_guard) = runtime::InstanceGuard::acquire(window)? else {
+            return Ok(());
+        };
+        if window {
+            details::show(settings, demo)
+        } else {
+            app::TrayApp::run()
+        }
     })();
     if let Err(error) = result {
         let _ = Log::Monitor.event("runtime-error", &error.to_string());
