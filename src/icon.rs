@@ -36,7 +36,7 @@ impl BatteryIcon {
     pub fn with_state(level: Option<u8>, low: bool, full: bool) -> Result<Icon, Box<dyn std::error::Error>> {
         let colour = if low { [251, 104, 103, 255] }
             else if full { [75, 210, 154, 255] }
-            else { [103, 213, 208, 255] };
+            else { [242, 193, 78, 255] };
         let mut rgba = vec![0; 32 * 32 * 4];
         let mut pixel = |x: usize, y: usize, colour: [u8; 4]| {
             let index = (y * 32 + x) * 4;
