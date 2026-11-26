@@ -64,6 +64,8 @@ pub struct Settings {
     pub animate_charging: bool,
     pub theme: Theme,
     pub chart_hours: u8,
+    pub headset_name: String,
+    pub mouse_name: String,
 }
 
 impl Default for Settings {
@@ -73,6 +75,7 @@ impl Default for Settings {
             low_threshold: 20, refresh_seconds: 60, show_headset: true, show_mouse: true,
             widget_scale: 100, widget_accent: Accent::System, animate_charging: true,
             theme: Theme::System, chart_hours: 12,
+            headset_name: String::new(), mouse_name: String::new(),
         }
     }
 }
@@ -83,13 +86,25 @@ impl Settings {
         self.refresh_seconds = self.refresh_seconds.clamp(15, 300);
         self.widget_scale = self.widget_scale.clamp(80, 130);
         if ![3,6,12,24,48].contains(&self.chart_hours) { self.chart_hours = 12; }
+        self.headset_name = validated_name(&self.headset_name);
+        self.mouse_name = validated_name(&self.mouse_name);
         self
     }
+    pub fn device_name(&self, kind: DeviceKind) -> &str {
+        let custom = match kind { DeviceKind::Headset => &self.headset_name, DeviceKind::Mouse => &self.mouse_name };
+        if custom.is_empty() { kind.name() } else { custom }
+    }
+    pub fn backup(&self) -> io::Result<()> { write_json("settings-backup.json", &self.clone().validated()) }
+    pub fn restore_backup() -> io::Result<Self> { read_json::<Self>("settings-backup.json").map(Self::validated) }
     pub fn widget_options(&self) -> WidgetOptions {
         WidgetOptions { visible: [self.show_headset, self.show_mouse], scale: self.widget_scale, accent: self.widget_accent, animate: self.animate_charging }
     }
     pub fn load() -> Self { read_json::<Self>("settings.json").unwrap_or_default().validated() }
     pub fn save(&self) -> io::Result<()> { write_json("settings.json", &self.clone().validated()) }
+}
+
+fn validated_name(value: &str) -> String {
+    value.chars().filter(|ch| !ch.is_control()).take(30).collect::<String>().trim().to_owned()
 }
 
 pub fn data_dir() -> io::Result<PathBuf> {
@@ -261,6 +276,13 @@ mod tests {
         assert_eq!(s.widget_options().visible, [false, true]);
         assert_eq!(s.widget_options().accent, Accent::Violet);
         assert_eq!(s.theme, Theme::Light);
+    }
+    #[test]
+    fn custom_device_names_do_not_change_device_identity() {
+        let s = Settings { headset_name: " Studio Headset ".into(), mouse_name: "\n".into(), ..Default::default() }.validated();
+        assert_eq!(s.device_name(DeviceKind::Headset), "Studio Headset");
+        assert_eq!(s.device_name(DeviceKind::Mouse), "VXE MAD R");
+        assert_eq!(DeviceKind::Headset.index(), 0);
     }
     #[test]
     fn estimated_voltage_never_claims_confirmed_full() {
