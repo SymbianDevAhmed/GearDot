@@ -35,9 +35,9 @@ Both readings appear side by side next to the Windows notification area, using a
 ## ✨ Key Features
 
 - **Overview:** a tray-launched overview with original device glyphs and battery rings, sorted lowest first. USB devices link to their history.
-- **Screen-edge slider:** hover the slim handle on the right edge to reveal battery rings. It is enabled by default, works alongside the taskbar indicators, and hides during fullscreen use. Manage it in **Settings → Appearance**. Bluetooth rings use the levels reported by Windows.
+- **Screen-edge slider:** hover the slim handle on the right edge to reveal battery rings. It is enabled by default, works alongside the taskbar indicators, and hides during fullscreen use. Manage it in **Settings → Appearance**. The taskbar, device cards, and slider list connected devices with a battery reading. The slider opens from a slim handle and uses animated rings with a gold, low-battery pink, or full-battery green accent. Bluetooth uses Windows connection state and the battery level Windows reports.
 - **Connect notifications:** opt in to show a fresh percentage when a supported USB device becomes available again.
-- **Bluetooth preview:** Overview reads battery percentages already cached by Windows on present Bluetooth device nodes. This path sends no Bluetooth requests and uses no vendor protocol. A single cached percentage does not establish earbud-side percentages, charging, or case battery.
+- **Bluetooth preview:** The monitor reads battery percentages already stored by Windows for devices that Windows reports as connected. This path sends no Bluetooth requests and uses no vendor protocol. A single cached percentage does not establish earbud-side percentages, charging, or case battery.
 - **Demo:** launch the executable with `--demo` for a read-only Overview with illustrative data.
 
 The Windows Settings readings supplied for the first hardware check cover **HUAWEI FreeArc**, **HUAWEI FreeBuds 6i**, **soundcore K20i**, **Soundcore Life P2 Mini**, and **HUAWEI MOUSE CD23**. The app reads the current cached value at runtime. Verify each device individually by comparing Overview to Windows Bluetooth settings when connected.
@@ -63,7 +63,7 @@ The Windows Settings readings supplied for the first hardware check cover **HUAW
 - 🗂️ **Settings Backup** — Export saved preferences and load a local backup without automatically changing Windows startup.
 - 🏷️ **Custom Device Names** — Personal labels preserve the underlying hardware identity.
 - ℹ️ **About & Updates** — Original emblem, app version, developer identity and an authenticated-browser link to GitHub Releases (no stored credential or automatic update).
-- 🔋 **Power Saving Mode** — Background polling at least 120s, reconnect retries at 45s, slower layout checks and no animation; charging still refreshes at most every 30s.
+- 🔋 **Power Saving Mode** — Background polling at least 120s, reconnect retries at 12s, slower layout checks and no animation; charging still refreshes at most every 30s.
 - 💤 **Sleep & Wake Recovery** — Invalidate in-flight readings across suspension and refresh promptly after resume.
 - 🎛️ **Device Profiles** — Optional independent refresh intervals and low battery thresholds; MAD R full alerts are configurable per device.
 - 🖥️ **Multi-Monitor & Position** — Select the primary/secondary Windows taskbar and adjust the offset near the notification area; fall back safely when unavailable.
@@ -227,7 +227,7 @@ Right-click the taskbar widget and select **Settings**, or open the details card
 
 The MAD R widget indicates charging with a green percentage and charging symbol, then displays **Full** when the mouse reports 100%. A single completion alert is emitted after a known charging session; Windows notification settings may suppress the notification. G435 still only reports battery voltage: an estimated 100% is explicitly labelled as an estimate in the details card, not verified charge completion.
 
-Both devices reconnect automatically, with independent 15-second retries while unavailable (45 seconds in Power Saving Mode). Device visibility, widget size and colour, charging animation, history period and window theme are adjustable from Settings. Old readings are marked stale and do not trigger alerts. The monitor prevents duplicate monitor instances in the same session.
+Both devices reconnect automatically, with independent 4-second retries while unavailable (12 seconds in Power Saving Mode). Device visibility, widget size and colour, charging animation, history period and window theme are adjustable from Settings. Old readings are marked stale and do not trigger alerts. The monitor prevents duplicate monitor instances in the same session.
 
 The About page contains the app identity and a browser link to GitHub Releases; since this repository is private, it does not perform an unauthenticated update request or store a token. Test notifications and the data-folder button help troubleshoot, while a settings backup can be loaded as an unsaved draft.
 
