@@ -10,11 +10,16 @@ on:
       - 'Cargo.lock'
       - 'build.rs'
       - 'assets/**'
+      - 'installer/**'
       - '.github/workflows/build.yml'
   workflow_dispatch:
     inputs:
       publish_release:
         description: Publish stable release after tests pass
+        type: boolean
+        default: false
+      prepare_sources:
+        description: Generate lockfile and format source (no executable or release)
         type: boolean
         default: false
 
@@ -27,6 +32,7 @@ concurrency:
 
 jobs:
   windows:
+    if: github.event_name != 'workflow_dispatch' || !inputs.prepare_sources
     runs-on: windows-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -39,22 +45,45 @@ jobs:
         run: |
           $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
           "version=$($metadata.packages[0].version)" >> $env:GITHUB_OUTPUT
+      - name: Install quality tools
+        run: rustup component add rustfmt clippy
+      - name: Check formatting
+        run: |
+          if (git ls-files Cargo.lock) { cargo fmt --all -- --check }
+          else { Write-Host "Initial source formatting is prepared separately." }
       - name: Run protocol and domain tests
-        run: cargo test --all-targets
+        run: |
+          if (Test-Path Cargo.lock) { cargo test --locked --all-targets }
+          else { cargo test --all-targets }
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets
       - name: Build portable executables
         if: github.event_name == 'workflow_dispatch' && inputs.publish_release
-        run: cargo build --release --bins
+        run: cargo build --locked --release --bins
+      - name: Package Windows installer
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $icon = Get-ChildItem target/release/build -Recurse -Filter wireless-battery-monitor.ico |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $icon) { throw "Generated application icon missing" }
+          $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler missing" }
+          & $iscc "/DAppVersion=$env:VERSION" "/DAppIcon=$($icon.FullName)" "installer/setup.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item target/release-package -ItemType Directory -Force | Out-Null
+          Copy-Item target/release/wireless-battery-monitor.exe,target/release/diagnostic.exe,target/installer/WirelessBatteryMonitor-Setup-x64.exe target/release-package/
       - uses: actions/upload-artifact@v6
         if: github.event_name == 'workflow_dispatch' && inputs.publish_release
         with:
           name: WirelessBatteryMonitor-windows-x64
-          path: |
-            target/release/wireless-battery-monitor.exe
-            target/release/diagnostic.exe
+          path: target/release-package/*.exe
           if-no-files-found: error
 
   publish:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_release
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_release && !inputs.prepare_sources
     needs: windows
     runs-on: ubuntu-latest
     permissions:
@@ -72,5 +101,37 @@ jobs:
         run: |
           cd dist
           zip WirelessBatteryMonitor-windows-x64.zip wireless-battery-monitor.exe diagnostic.exe
-          sha256sum wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-windows-x64.zip > SHA256SUMS.txt
-          gh release create "v$VERSION" wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-windows-x64.zip SHA256SUMS.txt --target "$GITHUB_SHA" --title "Wireless Battery Monitor v$VERSION" --latest --notes "Windows x64 release. Persistent settings, optional sign-in startup, independent reconnection, single-instance handling, native low-battery and charge-complete notifications, MAD R charging/full status, per-device visibility, customised widget size and colour, charging animation, window themes and enhanced analytics. Automated Rust tests passed. G435 charging state remains unavailable; its percentage is a voltage-based estimate."
+          sha256sum wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-windows-x64.zip WirelessBatteryMonitor-Setup-x64.exe > SHA256SUMS.txt
+          gh release create "v$VERSION" wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-windows-x64.zip WirelessBatteryMonitor-Setup-x64.exe SHA256SUMS.txt --target "$GITHUB_SHA" --title "Wireless Battery Monitor v$VERSION" --latest --notes "Windows x64 release. Persistent settings, optional sign-in startup, independent reconnection, single-instance handling, native low-battery and charge-complete notifications, MAD R charging/full status, per-device visibility, customised widget size and colour, charging animation, window themes, enhanced analytics, About, notification test, local logs, settings backups and Windows installer. Automated Rust tests passed. G435 charging state remains unavailable; its percentage is a voltage-based estimate."
+
+  prepare:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.prepare_sources && !inputs.publish_release
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Select Rust and format source
+        run: |
+          rustup default stable
+          rustup component add rustfmt clippy
+          if (-not (Test-Path Cargo.lock)) { cargo generate-lockfile }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo fmt --all
+      - name: Verify formatting and locked tests
+        run: |
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --all-targets
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets
+      - name: Commit reproducible source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock build.rs src tests
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          git commit -m "Lock dependencies and format Rust source"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push origin HEAD:main
