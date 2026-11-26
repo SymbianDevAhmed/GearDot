@@ -14,11 +14,12 @@ All notable changes to Wireless Battery Monitor are documented here.
 - About page, browser link to releases, local diagnostic logs and settings backup/restore.
 - Per-user Windows installer source with Start menu shortcuts and uninstaller.
 - Original executable version metadata, architecture and contributor documentation.
+- Portable local-data mode, private package builds, independent device profiles, sleep/wake recovery, power saving, taskbar monitor and offset preferences, sound preference and CSV history export.
 - Source formatting, Clippy checks and dependency locking in CI.
 
 ### Changed
 - Separated device construction from UI and diagnostic entry point using a shared device factory.
-- Push workflows test and check source; portable and installer packages are produced only on an explicit release run.
+- Push workflows test and check source; portable and installer packages are produced on explicitly requested private-package or release runs.
 
 ### Limitations
 - G435 reports voltage, not a confirmed charge-state flag.
