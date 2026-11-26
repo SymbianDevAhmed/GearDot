@@ -2,8 +2,8 @@
 use crate::runtime;
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use wireless_battery_monitor::{
-    battery::DeviceKind, history::BatteryHistory,
-    preferences::{Accent, LiveSnapshot, Settings, Theme},
+    battery::DeviceKind, diagnostics::Log, history::BatteryHistory,
+    preferences::{data_dir, Accent, LiveSnapshot, Settings, Theme},
 };
 use std::time::Duration;
 
@@ -22,19 +22,24 @@ pub fn show(open_settings: bool) -> Result<(), Box<dyn std::error::Error>> {
     let mut settings = Settings::load();
     if let Ok(enabled) = runtime::startup_enabled() { settings.start_with_windows = enabled; }
     let app = DetailsCard {
-        selected: DeviceKind::Headset, settings_page: open_settings,
-        original: settings.clone(), settings, message: None,
+        selected: DeviceKind::Headset, page: if open_settings { Page::Settings } else { Page::Battery },
+        original: settings.clone(), settings, message: None, notifier: None, icon_texture: None,
     };
     eframe::run_native("Wireless Battery Monitor — Details & Settings", options, Box::new(|_| Ok(Box::new(app))))
         .map_err(|error| std::io::Error::other(error.to_string()).into())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page { Battery, Settings, About }
+
 struct DetailsCard {
     selected: DeviceKind,
-    settings_page: bool,
+    page: Page,
     original: Settings,
     settings: Settings,
     message: Option<(bool, String)>,
+    notifier: Option<runtime::Notifier>,
+    icon_texture: Option<egui::TextureHandle>,
 }
 
 impl DetailsCard {
@@ -46,7 +51,7 @@ impl DetailsCard {
         let low = if dark { Color32::LIGHT_RED } else { Color32::from_rgb(160, 25, 35) };
         let history = BatteryHistory::load(self.selected);
         let reading = LiveSnapshot::load().reading(self.selected, now);
-        ui.heading(self.selected.name());
+        ui.heading(self.original.device_name(self.selected));
         ui.label(egui::RichText::new(match self.selected {
             DeviceKind::Headset => "LIGHTSPEED  /  USB receiver",
             DeviceKind::Mouse => "2.4 GHz  /  USB receiver or cable",
@@ -117,6 +122,14 @@ impl DetailsCard {
         ui.label(egui::RichText::new("DEVICES").small().strong());
         ui.checkbox(&mut self.settings.show_headset, "Show Logitech G435");
         ui.checkbox(&mut self.settings.show_mouse, "Show VXE MAD R");
+        ui.horizontal(|ui| {
+            ui.label("Headset name");
+            ui.add(egui::TextEdit::singleline(&mut self.settings.headset_name).hint_text("Logitech G435").char_limit(30));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Mouse name");
+            ui.add(egui::TextEdit::singleline(&mut self.settings.mouse_name).hint_text("VXE MAD R").char_limit(30));
+        });
         ui.label(egui::RichText::new("Hidden devices still collect history and alerts. If both are hidden, use the notification-area icon.").small().weak());
         ui.add_space(10.0);
         ui.separator();
@@ -141,6 +154,11 @@ impl DetailsCard {
         ui.checkbox(&mut self.settings.low_notifications, "Notify when battery is low");
         ui.add_enabled(self.settings.low_notifications, egui::Slider::new(&mut self.settings.low_threshold, 5..=50).suffix("%").text("Low battery"));
         ui.checkbox(&mut self.settings.full_notifications, "Notify when charging is complete");
+        if ui.button("Test notification").clicked() {
+            self.notifier.get_or_insert_with(runtime::Notifier::new).show("Wireless Battery Monitor", "Test notification — your app is ready.", true);
+            let _ = Log::Ui.event("notification", "Test requested");
+            self.message = Some((true, "Test requested. Check Windows notification settings if it does not appear.".into()));
+        }
         ui.label(egui::RichText::new("Full alerts require a confirmed 100% reading after a known charging session (MAD R).").small().weak());
         ui.add_space(10.0);
         ui.separator();
@@ -154,6 +172,7 @@ impl DetailsCard {
                             self.original = updated.clone();
                             self.settings = updated;
                             self.message = Some((true, "Settings saved.".into()));
+                            let _ = Log::Ui.event("settings", "Settings saved");
                         }
                         Err(error) => {
                             let rollback = runtime::set_startup(before);
@@ -169,11 +188,63 @@ impl DetailsCard {
             }
         });
         if self.settings != self.original { ui.label(egui::RichText::new("Unsaved changes").small().weak()); }
+        ui.add_space(10.0);
+        ui.separator();
+        ui.label(egui::RichText::new("BACKUP & DIAGNOSTICS").small().strong());
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Export saved settings").clicked() {
+                self.message = Some(match self.original.backup() {
+                    Ok(()) => (true, "Saved settings-backup.json in the data folder.".into()),
+                    Err(e) => (false, format!("Backup failed: {e}")),
+                });
+            }
+            if ui.button("Load settings backup").clicked() {
+                match Settings::restore_backup() {
+                    Ok(mut saved) => {
+                        // Loading a backup never changes the actual startup registration.
+                        saved.start_with_windows = self.settings.start_with_windows;
+                        self.settings = saved;
+                        self.message = Some((true, "Backup loaded. Click Save to apply.".into()));
+                    },
+                    Err(e) => self.message = Some((false, format!("Restore failed: {e}"))),
+                }
+            }
+        });
+        if ui.button("Open data and logs folder").clicked() {
+            let result = data_dir().and_then(|dir| {
+                std::fs::create_dir_all(&dir)?;
+                std::process::Command::new("explorer.exe").arg(dir).spawn().map(|_| ())
+            });
+            if let Err(e) = result { self.message = Some((false, format!("Cannot open folder: {e}"))); }
+        }
         if let Some((success, message)) = &self.message {
             ui.label(egui::RichText::new(message).color(if *success { Color32::LIGHT_GREEN } else { Color32::LIGHT_RED }));
         }
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new(concat!("Wireless Battery Monitor v", env!("CARGO_PKG_VERSION"), " • Ahmed Gaber")).small().weak());
+    }
+
+    fn about_page(&mut self, ui: &mut egui::Ui) {
+        if self.icon_texture.is_none() {
+            let image = egui::ColorImage::from_rgba_unmultiplied([64,64], include_bytes!(concat!(env!("OUT_DIR"), "/app-icon.rgba")));
+            self.icon_texture = Some(ui.ctx().load_texture("app-emblem", image, egui::TextureOptions::LINEAR));
+        }
+        ui.vertical_centered(|ui| {
+            ui.add_space(12.0);
+            if let Some(texture) = &self.icon_texture { ui.image((texture.id(), Vec2::splat(72.0))); }
+            ui.heading("Wireless Battery Monitor");
+            ui.label(egui::RichText::new(concat!("Version ", env!("CARGO_PKG_VERSION"), "  •  Windows x64")).weak());
+            ui.add_space(8.0);
+            ui.label("A native Rust battery monitor for Logitech G435 and VXE MAD R.");
+            ui.add_space(14.0);
+            ui.hyperlink_to("Check for updates on GitHub", "https://github.com/SymbianDevAhmed/Wireless-Battery-Monitor/releases");
+            ui.label(egui::RichText::new("Opens your private repository in your browser. No access token is stored.").small().weak());
+            ui.hyperlink_to("Project & documentation", "https://github.com/SymbianDevAhmed/Wireless-Battery-Monitor");
+            ui.add_space(12.0);
+            ui.separator();
+            ui.label(egui::RichText::new("Unofficial; not affiliated with Logitech, VXE or ATK.").small().weak());
+            ui.add_space(8.0);
+            ui.label("Copyright © 2026 Ahmed Gaber");
+            ui.hyperlink_to("SymbianDevAhmed", "https://github.com/SymbianDevAhmed");
+        });
     }
 }
 
@@ -182,20 +253,22 @@ impl eframe::App for DetailsCard {
         let light = match self.settings.theme { Theme::System => runtime::system_light_theme(), Theme::Light => true, Theme::Dark => false };
         ctx.set_visuals(if light { egui::Visuals::light() } else { egui::Visuals::dark() });
         ctx.request_repaint_after(Duration::from_secs(2));
+        if let Some(notifier) = self.notifier.as_mut() { notifier.tick(); }
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 for kind in DeviceKind::ALL {
                     let label = if kind == DeviceKind::Headset { "G435" } else { "MAD R" };
-                    if ui.selectable_label(!self.settings_page && self.selected == kind, label).clicked() {
-                        self.selected = kind; self.settings_page = false;
+                    if ui.selectable_label(self.page == Page::Battery && self.selected == kind, label).clicked() {
+                        self.selected = kind; self.page = Page::Battery;
                     }
                 }
-                if ui.selectable_label(self.settings_page, "Settings").clicked() { self.settings_page = true; }
+                if ui.selectable_label(self.page == Page::Settings, "Settings").clicked() { self.page = Page::Settings; }
+                if ui.selectable_label(self.page == Page::About, "About").clicked() { self.page = Page::About; }
             });
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.add_space(8.0);
-                if self.settings_page { self.settings_page(ui); } else { self.battery_page(ui); }
+                match self.page { Page::Settings => self.settings_page(ui), Page::About => self.about_page(ui), Page::Battery => self.battery_page(ui) }
             });
         });
     }
