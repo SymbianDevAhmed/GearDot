@@ -7,14 +7,26 @@ fn main() -> std::process::ExitCode {
         match result {
             Ok(reading) => {
                 success = true;
-                println!("{}: {} mV; {}{}%; charging: {:?}", kind.name(), reading.millivolts(),
-                    if reading.estimated() { "~" } else { "" }, reading.percentage(), reading.charging());
+                println!(
+                    "{}: {} mV; {}{}%; charging: {:?}",
+                    kind.name(),
+                    reading.millivolts(),
+                    if reading.estimated() { "~" } else { "" },
+                    reading.percentage(),
+                    reading.charging()
+                );
             }
             Err(error) => eprintln!("{}: {error}", kind.name()),
         }
     }
-    if success { std::process::ExitCode::SUCCESS } else { std::process::ExitCode::FAILURE }
+    if success {
+        std::process::ExitCode::SUCCESS
+    } else {
+        std::process::ExitCode::FAILURE
+    }
 }
 
 #[cfg(not(windows))]
-fn main() { println!("This diagnostic requires Windows."); }
+fn main() {
+    println!("This diagnostic requires Windows.");
+}

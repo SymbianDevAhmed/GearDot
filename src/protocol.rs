@@ -11,7 +11,11 @@ impl G435Protocol {
         bytes.iter().fold(0u16, |mut crc, &byte| {
             crc ^= u16::from(byte) << 8;
             for _ in 0..8 {
-                crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x1021 } else { crc << 1 };
+                crc = if crc & 0x8000 != 0 {
+                    (crc << 1) ^ 0x1021
+                } else {
+                    crc << 1
+                };
             }
             crc
         })
@@ -32,8 +36,16 @@ impl G435Protocol {
         [
             (Self::frame(0x84, &[1]), 50),
             (Self::frame(0x85, &[1]), 50),
-            (Self::frame(0x80, &[0x50, 0x41, 0x06, 0x01, 0x0d, 0x00, 0x25, 0x34, 0x12,
-                0x5a, 0x5a, 0x01, 0, 0, 0, 0xf0, 0, 0, 0]), 450),
+            (
+                Self::frame(
+                    0x80,
+                    &[
+                        0x50, 0x41, 0x06, 0x01, 0x0d, 0x00, 0x25, 0x34, 0x12, 0x5a, 0x5a, 0x01, 0,
+                        0, 0, 0xf0, 0, 0, 0,
+                    ],
+                ),
+                450,
+            ),
             (Self::frame(0x80, &[0x50, 0x41, 0x0e, 2, 1, 0xe0]), 120),
             (Self::frame(0x80, &[0x50, 0x41, 0x0e, 3, 2, 0xe1, 1]), 120),
             (Self::frame(0x80, &[0x50, 0x41, 0x0e, 4, 1, 0xe0]), 120),
@@ -44,7 +56,9 @@ impl G435Protocol {
         Self::frame(0x80, &[0x50, 0x41, 0x06, 5, 1, 0, 0x31])
     }
 
-    pub fn end_session() -> Report { Self::frame(0x85, &[2]) }
+    pub fn end_session() -> Report {
+        Self::frame(0x85, &[2])
+    }
 
     pub fn parse_voltage(report: &[u8]) -> Result<Option<u16>, BatteryError> {
         let payload = match report.len() {

@@ -1,6 +1,9 @@
 // Generate a multi-resolution Windows icon from the project's original vector emblem.
+use resvg::{
+    tiny_skia::{Pixmap, Transform},
+    usvg,
+};
 use std::{env, fs, io, path::PathBuf};
-use resvg::{tiny_skia::{Pixmap, Transform}, usvg};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=assets/icon.svg");
@@ -12,7 +15,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for size in sizes {
         let mut pixmap = Pixmap::new(size, size).ok_or("icon allocation failed")?;
         let scale = size as f32 / 256.0;
-        resvg::render(&tree, Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+        resvg::render(
+            &tree,
+            Transform::from_scale(scale, scale),
+            &mut pixmap.as_mut(),
+        );
         // PNG payloads are supported by modern Windows ICO files.
         images.push((size, pixmap.encode_png()?));
         if size == 64 {
@@ -41,19 +48,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ico.extend_from_slice(&offset.to_le_bytes());
         offset += png.len() as u32;
     }
-    for (_, png) in images { ico.extend_from_slice(&png); }
+    for (_, png) in images {
+        ico.extend_from_slice(&png);
+    }
     let icon_path = out.join("wireless-battery-monitor.ico");
     fs::write(&icon_path, ico)?;
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let path = icon_path.to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid icon path"))?;
+        let path = icon_path
+            .to_str()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid icon path"))?;
         let version = format!("{}.{}", env!("CARGO_PKG_VERSION"), 0);
         for (binary, description) in [
-            ("wireless-battery-monitor", "Wireless Peripheral Battery Monitor"),
+            (
+                "wireless-battery-monitor",
+                "Wireless Peripheral Battery Monitor",
+            ),
             ("diagnostic", "Wireless Battery Monitor Diagnostic"),
         ] {
             let resource_dir = out.join(format!("resource-{binary}"));
             fs::create_dir_all(&resource_dir)?;
-            let resource_dir = resource_dir.to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid resource directory"))?;
+            let resource_dir = resource_dir.to_str().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid resource directory")
+            })?;
             winresource::WindowsResource::new()
                 .set_output_directory(resource_dir)
                 .set_icon(path)

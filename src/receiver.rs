@@ -8,11 +8,17 @@ use std::time::{Duration, Instant};
 pub struct G435Receiver;
 
 impl G435Receiver {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 
     fn write(device: &HidDevice, report: &Report) -> Result<(), BatteryError> {
-        let written = device.write(report).map_err(|e| BatteryError::Io(e.to_string()))?;
-        if written != report.len() { return Err(BatteryError::Io("short HID write".into())); }
+        let written = device
+            .write(report)
+            .map_err(|e| BatteryError::Io(e.to_string()))?;
+        if written != report.len() {
+            return Err(BatteryError::Io("short HID write".into()));
+        }
         Ok(())
     }
 
@@ -28,12 +34,15 @@ impl G435Receiver {
             while Instant::now() < deadline {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 let wait_ms = remaining.as_millis().max(1) as i32;
-                let count = device.read_timeout(&mut buffer, wait_ms)
+                let count = device
+                    .read_timeout(&mut buffer, wait_ms)
                     .map_err(|e| BatteryError::Io(e.to_string()))?;
                 if let Some(mv) = G435Protocol::parse_voltage(&buffer[..count])? {
                     return BatteryReading::from_voltage(mv);
                 }
-                if count == 0 { break; }
+                if count == 0 {
+                    break;
+                }
             }
             Err(BatteryError::NoReply)
         })();

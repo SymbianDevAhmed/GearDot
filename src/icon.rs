@@ -2,9 +2,17 @@
 use tray_icon::Icon;
 
 const DIGITS: [[u8; 5]; 11] = [
-    [7,5,5,5,7], [2,6,2,2,7], [7,1,7,4,7], [7,1,7,1,7],
-    [5,5,7,1,1], [7,4,7,1,7], [7,4,7,5,7], [7,1,1,1,1],
-    [7,5,7,5,7], [7,5,7,1,7], [0,0,7,0,0],
+    [7, 5, 5, 5, 7],
+    [2, 6, 2, 2, 7],
+    [7, 1, 7, 4, 7],
+    [7, 1, 7, 1, 7],
+    [5, 5, 7, 1, 1],
+    [7, 4, 7, 1, 7],
+    [7, 4, 7, 5, 7],
+    [7, 1, 1, 1, 1],
+    [7, 5, 7, 5, 7],
+    [7, 5, 7, 1, 7],
+    [0, 0, 7, 0, 0],
 ];
 
 pub struct BatteryIcon;
@@ -20,7 +28,9 @@ impl BatteryIcon {
         let mut rgba = vec![0; 32 * 32 * 4];
         for y in 1..31 {
             for x in 1..31 {
-                if (x == 1 || x == 30) && (y == 1 || y == 30) { continue; }
+                if (x == 1 || x == 30) && (y == 1 || y == 30) {
+                    continue;
+                }
                 let i = (y * 32 + x) * 4;
                 rgba[i..i + 4].copy_from_slice(&colour);
             }
@@ -34,13 +44,15 @@ impl BatteryIcon {
             let glyph = DIGITS[ch.to_digit(10).map(|n| n as usize).unwrap_or(10)];
             for (y, row) in glyph.iter().enumerate() {
                 for x in 0..3 {
-                    if row & (1 << (2 - x)) == 0 { continue; }
+                    if row & (1 << (2 - x)) == 0 {
+                        continue;
+                    }
                     for dy in 0..scale {
                         for dx in 0..scale {
                             let px = x0 + index * 4 * scale + x * scale + dx;
                             let py = y0 + y * scale + dy;
                             let i = (py * 32 + px) * 4;
-                            rgba[i..i+4].copy_from_slice(&[255,255,255,255]);
+                            rgba[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
                         }
                     }
                 }
