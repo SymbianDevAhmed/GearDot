@@ -1,10 +1,9 @@
 use crate::{icon::BatteryIcon, runtime::Notifier, taskbar::{TaskbarWidget, WidgetEvent, WidgetReading}};
 use wireless_battery_monitor::{
-    battery::{BatteryError, BatteryReading, BatterySource, DeviceKind},
+    battery::{BatteryError, BatteryReading, DeviceKind},
+    devices, diagnostics::Log,
     history::BatteryHistory,
-    mouse::MadRReceiver,
     preferences::{Alert, AlertTracker, LiveReading, LiveSnapshot, Settings},
-    receiver::G435Receiver,
 };
 use std::time::{Duration, Instant};
 use tray_icon::{menu::{Menu, MenuEvent, MenuItem}, TrayIcon, TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
@@ -48,6 +47,7 @@ pub struct TrayApp {
 
 impl TrayApp {
     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+        let _ = Log::Monitor.event("lifecycle", concat!("Started v", env!("CARGO_PKG_VERSION")));
         let event_loop = EventLoop::<Event>::with_user_event().build()?;
         let proxy = event_loop.create_proxy();
         let menu_proxy = proxy.clone();
@@ -76,6 +76,7 @@ impl TrayApp {
             reading.stale = true; reading.checked_at = 0; reading.message = "Monitor exited.".into();
         }
         let _ = app.snapshot.save();
+        let _ = Log::Monitor.event("lifecycle", "Exited");
         if let Some(error) = app.startup_error { return Err(std::io::Error::other(error).into()); }
         Ok(())
     }
@@ -117,10 +118,7 @@ impl TrayApp {
         let proxy = self.proxy.clone();
         // Distinct devices do not delay one another while disconnected or asleep.
         std::thread::spawn(move || {
-            let reading = match kind {
-                DeviceKind::Headset => G435Receiver::new().read_battery(),
-                DeviceKind::Mouse => MadRReceiver.read_battery(),
-            };
+            let reading = devices::read(kind);
             let _ = proxy.send_event(Event::Reading(kind, reading));
         });
     }
@@ -136,6 +134,7 @@ impl TrayApp {
         if updated != self.settings {
             let interval_changed = updated.refresh_seconds != self.settings.refresh_seconds;
             self.settings = updated;
+            let _ = Log::Monitor.event("settings", "Preferences applied");
             self.snapshot.refresh_seconds = self.settings.refresh_seconds;
             let _ = self.snapshot.save();
             if interval_changed {
@@ -156,13 +155,14 @@ impl TrayApp {
         let mut delay = Duration::from_secs(self.settings.refresh_seconds);
         let status = match result {
             Ok(reading) => {
-                let _ = history.record(reading);
+                if history.record(reading).is_err() { let _ = Log::Monitor.event("storage", "Could not save history"); }
                 if let Some(alert) = self.alerts[index].observe(reading, &self.settings) {
+                    let _ = Log::Monitor.event("alert", &format!("{}: {:?}", kind.name(), alert));
                     if let Some(notifier) = self.notifier.as_mut() {
                         match alert {
                             Alert::Low => notifier.show("Low battery", &format!("{}: {}{}%. Time to charge.",
-                                kind.name(), if reading.estimated() { "~" } else { "" }, reading.percentage()), false),
-                            Alert::Full => notifier.show("Battery full", &format!("{} is fully charged (100%).", kind.name()), true),
+                                self.settings.device_name(kind), if reading.estimated() { "~" } else { "" }, reading.percentage()), false),
+                            Alert::Full => notifier.show("Battery full", &format!("{} is fully charged (100%).", self.settings.device_name(kind)), true),
                         }
                     }
                 }
@@ -189,6 +189,11 @@ impl TrayApp {
             },
         };
         self.next_due[index] = Instant::now() + delay;
+        let previous = &self.snapshot.devices[index];
+        if previous.level.is_some() != status.level.is_some() || previous.stale != status.stale || previous.charging != status.charging || previous.message != status.message {
+            let label = if status.level.is_none() { "Unavailable" } else { status.state_label() };
+            let _ = Log::Monitor.event("device", &format!("{}: {}", kind.name(), label));
+        }
         self.snapshot.devices[index] = status;
         let _ = self.snapshot.save();
         self.update_ui();
@@ -203,10 +208,10 @@ impl TrayApp {
         for kind in DeviceKind::ALL {
             let reading = &self.snapshot.devices[kind.index()];
             let message = if let Some(level) = reading.level {
-                format!("{}: {}{}% — {}", kind.name(), if reading.estimated || reading.stale { "~" } else { "" },
+                format!("{}: {}{}% — {}", self.settings.device_name(kind), if reading.estimated || reading.stale { "~" } else { "" },
                     level, reading.state_label())
             } else {
-                format!("{}: {}", kind.name(), if reading.message.is_empty() { "Checking..." } else { &reading.message })
+                format!("{}: {}", self.settings.device_name(kind), if reading.message.is_empty() { "Checking..." } else { &reading.message })
             };
             self.status[kind.index()].set_text(&message);
             messages.push(message);
