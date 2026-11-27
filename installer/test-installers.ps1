@@ -3,7 +3,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $packages = (Resolve-Path -LiteralPath $PackageDirectory).Path
-$installed = Join-Path $env:LOCALAPPDATA 'Programs/GearDot'
+$defaultInstallFolder = Join-Path $env:LOCALAPPDATA 'Programs/GearDot'
+$customInstallFolder = Join-Path $env:LOCALAPPDATA 'GearDot Installer Test\Custom Folder'
+$installed = $defaultInstallFolder
 $shortcut = Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/GearDot/GearDot.lnk'
 $msiexec = Join-Path $env:SystemRoot 'System32/msiexec.exe'
 $msi = Join-Path $packages 'GearDot-Setup-x64.msi'
@@ -49,15 +51,21 @@ function Remove-InstalledMsi {
     if (Test-Path -LiteralPath $shortcut) { throw 'Uninstall left the shortcut in place.' }
 }
 
-if (Test-Path -LiteralPath (Join-Path $installed 'GearDot.exe')) {
+if (Test-Path 'HKCU:\Software\GearDot') {
     throw 'Run this test in a disposable Windows environment with no existing GearDot installation.'
 }
+$installed = $customInstallFolder
 $log = Join-Path $packages 'install-msi.log'
-Invoke-Installer $msiexec "/i `"$msi`" /qn /norestart /L*v `"$log`"" $log
+Invoke-Installer $msiexec "/i `"$msi`" INSTALLFOLDER=`"$installed`" /qn /norestart /L*v `"$log`"" $log
+Test-Install
+Remove-Item -LiteralPath (Join-Path $installed 'diagnostic.exe')
+$log = Join-Path $packages 'repair-msi.log'
+Invoke-Installer $msiexec "/fa `"$msi`" /qn /norestart /L*v `"$log`"" $log
 Test-Install
 Remove-InstalledMsi
-Write-Host 'MSI installed, started GearDot, and uninstalled successfully.'
+Write-Host 'MSI installed in a custom folder, repaired missing files, started GearDot, and uninstalled successfully.'
 
+$installed = $defaultInstallFolder
 $log = Join-Path $packages 'install-exe.log'
 Invoke-Installer $exe "/S /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$log`"" $log
 Test-Install

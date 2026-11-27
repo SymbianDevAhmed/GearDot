@@ -88,6 +88,7 @@ fn details_card(settings: Settings, open_settings: bool, demo: bool) -> DetailsC
         background_texture: None,
         window_icons: runtime::WindowIcons::default(),
         widget_previews: Default::default(),
+        pending_destination: None,
     }
 }
 
@@ -110,8 +111,14 @@ enum Page {
     About,
 }
 
+enum Destination {
+    Close,
+    Page(Page),
+}
+
 struct DetailsCard {
     page: Page,
+    pending_destination: Option<Destination>,
     original: Settings,
     settings: Settings,
     message: Option<(bool, String)>,
@@ -445,12 +452,69 @@ fn draw_device_card(ui: &mut egui::Ui, card: &DeviceCard, palette: &Palette, pin
 }
 
 impl DetailsCard {
-    fn request_close(&mut self, ctx: &egui::Context, now: Instant) {
-        if self.animations {
-            self.motion.get_or_insert(WindowMotion::Still).close(now);
+    fn request_destination(&mut self, destination: Destination, ctx: &egui::Context, now: Instant) {
+        if self.pending_destination.is_some() {
+            return;
+        }
+        if matches!(destination, Destination::Page(page) if page == self.page) {
+            return;
+        }
+        if self.settings != self.original {
+            self.pending_destination = Some(destination);
             ctx.request_repaint();
         } else {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.apply_destination(destination, ctx, now);
+        }
+    }
+
+    fn apply_destination(&mut self, destination: Destination, ctx: &egui::Context, now: Instant) {
+        match destination {
+            Destination::Close if self.animations => {
+                self.motion.get_or_insert(WindowMotion::Still).close(now);
+                ctx.request_repaint();
+            }
+            Destination::Close => {
+                self.motion = Some(WindowMotion::Closed);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Destination::Page(page) => self.page = page,
+        }
+    }
+
+    fn confirm_settings_changes(&mut self, ctx: &egui::Context, now: Instant) {
+        if self.pending_destination.is_none() {
+            return;
+        }
+        let modal = egui::Modal::new(egui::Id::new("unsaved-settings")).show(ctx, |ui| {
+            ui.heading("Unsaved settings");
+            ui.label("Save your settings before leaving?");
+            if let Some((false, message)) = &self.message {
+                ui.colored_label(ui.visuals().error_fg_color, message);
+            }
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Save changes").clicked() {
+                    self.save_settings();
+                    if self.settings == self.original {
+                        if let Some(destination) = self.pending_destination.take() {
+                            self.apply_destination(destination, ctx, now);
+                        }
+                    }
+                }
+                if ui.button("Discard changes").clicked() {
+                    self.settings = self.original.clone();
+                    self.message = None;
+                    if let Some(destination) = self.pending_destination.take() {
+                        self.apply_destination(destination, ctx, now);
+                    }
+                }
+                if ui.button("Keep editing").clicked() {
+                    self.pending_destination = None;
+                    self.page = Page::Settings;
+                }
+            });
+        });
+        if modal.should_close() && self.pending_destination.take().is_some() {
+            self.page = Page::Settings;
         }
     }
 
@@ -1146,6 +1210,13 @@ impl DetailsCard {
                 }
             });
         });
+        if ui.button("Restore defaults").clicked() {
+            self.settings = Settings::default();
+            self.message = Some((
+                true,
+                "Defaults loaded. Click Save settings to apply.".into(),
+            ));
+        }
         if self.settings != self.original {
             ui.label(egui::RichText::new("Unsaved changes").small().weak());
         }
@@ -1239,9 +1310,12 @@ impl DetailsCard {
                 let tint = self.background_tint();
                 paint_workspace(&painter, rect, tint, tint, Some(texture));
             }
-            if ui.small_button("Preview in Devices").clicked() {
-                self.page = Page::Overview;
-                ui.ctx().request_repaint();
+            if ui.small_button("Open Devices").clicked() {
+                self.request_destination(
+                    Destination::Page(Page::Overview),
+                    ui.ctx(),
+                    Instant::now(),
+                );
             }
         }
         ui.add_space(7.0);
@@ -1520,12 +1594,6 @@ impl DetailsCard {
                         self.message = Some((false, format!("Cannot open folder: {e}")));
                     }
                 }
-                ui.horizontal(|ui| {
-                    if ui.button("Reset defaults").clicked() {
-                        self.settings = Settings::default();
-                        self.message = Some((true, "Defaults loaded. Click Save to apply.".into()));
-                    }
-                });
             },
         );
     }
@@ -1644,12 +1712,20 @@ impl eframe::App for DetailsCard {
         if matches!(motion, WindowMotion::Closed) {
             return;
         }
-        if self.animations && ctx.input(|input| input.viewport().close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            motion.close(now);
+        if ctx.input(|input| input.viewport().close_requested()) {
+            if self.animations
+                || self.settings != self.original
+                || self.pending_destination.is_some()
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.request_destination(Destination::Close, ctx, now);
+            }
         }
-        if self.popup && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-            self.request_close(ctx, now);
+        if self.popup
+            && self.pending_destination.is_none()
+            && ctx.input(|input| input.key_pressed(egui::Key::Escape))
+        {
+            self.request_destination(Destination::Close, ctx, now);
         }
         let motion = self.motion.as_mut().expect("window motion initialized");
         motion.advance(now);
@@ -1776,7 +1852,7 @@ impl eframe::App for DetailsCard {
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("×").on_hover_text("Close").clicked() {
-                            self.request_close(ctx, now);
+                            self.request_destination(Destination::Close, ctx, now);
                         }
                         if ui.button("−").on_hover_text("Minimize").clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -1798,7 +1874,7 @@ impl eframe::App for DetailsCard {
                     "Devices",
                     self.page == Page::Overview,
                 ) {
-                    self.page = Page::Overview;
+                    self.request_destination(Destination::Page(Page::Overview), ctx, now);
                 }
                 if self.demo {
                     return;
@@ -1808,14 +1884,13 @@ impl eframe::App for DetailsCard {
                     (Page::Diagnostics, "Diagnostics"),
                 ] {
                     if navigation_item(ui, palette, page, label, self.page == page) {
-                        self.page = page;
-                        self.message = None;
+                        self.request_destination(Destination::Page(page), ctx, now);
                     }
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     for (page, label) in [(Page::About, "About"), (Page::Settings, "Settings")] {
                         if navigation_item(ui, palette, page, label, self.page == page) {
-                            self.page = page;
+                            self.request_destination(Destination::Page(page), ctx, now);
                         }
                     }
                 });
@@ -1837,6 +1912,7 @@ impl eframe::App for DetailsCard {
                     Page::About => self.about_page(ui),
                 });
             });
+        self.confirm_settings_changes(ctx, now);
         if scale != 1.0 {
             let translation = window.center().to_vec2() * (1.0 - scale);
             ctx.transform_layer_shapes(

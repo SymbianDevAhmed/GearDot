@@ -118,28 +118,36 @@ jobs:
           $icon = Get-ChildItem target/release/build -Recurse -Filter GearDot.ico |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $icon) { throw "Generated application icon missing" }
-          $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
-          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
-          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler missing" }
-          & $iscc "/DAppVersion=$env:VERSION" "/DAppIcon=$($icon.FullName)" "installer/setup.iss"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item target/release-package -ItemType Directory -Force | Out-Null
-          Copy-Item target/release/diagnostic.exe,target/installer/GearDot-Setup-x64.exe target/release-package/
+          Copy-Item target/release/diagnostic.exe target/release-package/
           $stage = New-Item target/msi-files -ItemType Directory -Force
-          Copy-Item target/release/diagnostic.exe,target/release/GearDot-DeviceProbe.exe,target/release/HeadsetControl.exe,LICENSE,THIRD-PARTY-NOTICES.txt,installer/GearDot.wxs $stage
+          Copy-Item target/release/diagnostic.exe,target/release/GearDot-DeviceProbe.exe,target/release/HeadsetControl.exe,LICENSE,THIRD-PARTY-NOTICES.txt,installer/GearDot.wxs,installer/setup-wrapper.nsi $stage
           Copy-Item target/release/wireless-battery-monitor.exe (Join-Path $stage GearDot.exe)
           Copy-Item $icon.FullName (Join-Path $stage GearDot.ico)
+          $wizard = (Resolve-Path installer/add-msi-wizard.py).Path
+          $databaseTool = (Resolve-Path installer/edit-msi.ps1).Path
           $wix = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
           if (-not (Test-Path (Join-Path $wix candle.exe))) {
             choco install wixtoolset --version 3.14.1 --no-progress -y
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
+          if (-not (Test-Path $nsis)) {
+            choco install nsis --no-progress -y
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           Push-Location $stage
           try {
             & (Join-Path $wix candle.exe) -arch x64 "-dVersion=$env:VERSION" GearDot.wxs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & (Join-Path $wix light.exe) -sice:ICE38 -sice:ICE91 -out ../release-package/GearDot-Setup-x64.msi GearDot.wixobj
+            & (Join-Path $wix light.exe) -sice:ICE38 -sice:ICE91 -out GearDot-Setup-x64.msi GearDot.wixobj
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            python $wizard GearDot-Setup-x64.msi
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $productCode = & $databaseTool -Package (Resolve-Path 'GearDot-Setup-x64.msi').Path -ProductCode
+            & $nsis "/DVERSION=$env:VERSION" "/DPRODUCT_CODE=$productCode" setup-wrapper.nsi
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Copy-Item GearDot-Setup-x64.exe,GearDot-Setup-x64.msi ../release-package/
           } finally {
             Pop-Location
           }
@@ -156,6 +164,12 @@ jobs:
             "{0}  {1}" -f (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
           }
           [IO.File]::WriteAllText((Join-Path (Get-Location).Path "target/release-package/SHA256SUMS.txt"), ($hashes -join "`n") + "`n", [Text.Encoding]::ASCII)
+      - name: Smoke-test both generated installers
+        if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
+        run: |
+          $testFolder = New-Item (Join-Path $env:RUNNER_TEMP 'geardot-installer-test') -ItemType Directory
+          Copy-Item target/release-package/GearDot-Setup-x64.exe,target/release-package/GearDot-Setup-x64.msi $testFolder
+          ./installer/test-installers.ps1 -PackageDirectory $testFolder.FullName
       - uses: actions/upload-artifact@v6
         if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
         with:
@@ -182,7 +196,7 @@ jobs:
         run: |
           cd dist
           sha256sum -c SHA256SUMS.txt
-          gh release create "v$VERSION" diagnostic.exe GearDot-Portable.zip GearDot-Setup-x64.exe GearDot-Setup-x64.msi GearDot-Source.zip headsetcontrol-4.3.0.tar.gz SHA256SUMS.txt --target "$GITHUB_SHA" --title "GearDot v$VERSION" --latest --notes "GearDot for Windows x64. Includes the BatteryHub and W.D.B.M device readers, Portable and Installer builds, and corresponding source. Available battery readings vary by device and connection."
+          gh release create "geardot-$VERSION" diagnostic.exe GearDot-Portable.zip GearDot-Setup-x64.exe GearDot-Setup-x64.msi GearDot-Source.zip headsetcontrol-4.3.0.tar.gz SHA256SUMS.txt --target "$GITHUB_SHA" --title "GearDot v$VERSION" --latest --notes "GearDot for Windows x64. Includes the BatteryHub and W.D.B.M device readers, Portable and Installer builds, and corresponding source. Available battery readings vary by device and connection."
 
   prepare:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.prepare_sources && !inputs.publish_release && !inputs.package_private

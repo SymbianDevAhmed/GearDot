@@ -7,6 +7,7 @@ use std::{env, fs, io, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=assets/icon.svg");
+    println!("cargo:rerun-if-changed=assets/geardot.manifest");
     println!("cargo:rerun-if-changed=build.rs");
     let out = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR missing")?);
     let tree = usvg::Tree::from_str(include_str!("assets/icon.svg"), &usvg::Options::default())?;
@@ -79,7 +80,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let resource_dir = resource_dir.to_str().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "invalid resource directory")
             })?;
-            winresource::WindowsResource::new()
+            let mut resource = winresource::WindowsResource::new();
+            if binary == "wireless-battery-monitor" {
+                resource.set_manifest(include_str!("assets/geardot.manifest"));
+            }
+            resource
                 .set_output_directory(resource_dir)
                 .set_icon(path)
                 .set("ProductName", "GearDot")

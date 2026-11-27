@@ -1,5 +1,9 @@
 use std::time::{Duration, Instant};
 
+pub fn taskbar_slot_origin(width: i32, cell: i32, slot: usize) -> i32 {
+    width - cell * (slot as i32 + 1)
+}
+
 #[derive(Default)]
 pub struct TaskbarAnchor {
     current: Option<i32>,
@@ -35,6 +39,18 @@ impl TaskbarAnchor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adding_a_device_leaves_existing_icons_at_the_same_screen_coordinates() {
+        let right = 1000;
+        let cell = 57;
+        let screen_x = |count, slot| {
+            let width = count * cell;
+            right - width + taskbar_slot_origin(width, cell, slot)
+        };
+        assert_eq!(screen_x(1, 0), screen_x(3, 0));
+        assert_eq!(screen_x(2, 1), screen_x(3, 1));
+    }
 
     #[test]
     fn temporary_shell_geometry_preserves_the_visible_anchor() {

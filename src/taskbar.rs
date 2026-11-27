@@ -1,5 +1,8 @@
 //! A compact native Windows taskbar indicator. No Explorer injection or hooks.
-use crate::{icon::DeviceGlyph, taskbar_anchor::TaskbarAnchor};
+use crate::{
+    icon::DeviceGlyph,
+    taskbar_anchor::{taskbar_slot_origin, TaskbarAnchor},
+};
 use eframe::egui;
 use std::{
     cell::RefCell,
@@ -52,6 +55,7 @@ pub struct WidgetReading {
     pub coarse: Option<&'static str>,
     pub stale: bool,
     pub estimated: bool,
+    pub(crate) pinned: bool,
 }
 
 impl WidgetReading {
@@ -142,6 +146,7 @@ pub fn widget_readings(
                 .is_some_and(|reading| reading.charge == InputCharge::Charging && !reading.stale),
             stale: battery.is_some_and(|reading| reading.stale),
             estimated: battery.is_some_and(|reading| reading.estimated),
+            pinned: false,
             detail: battery.map_or_else(
                 || coarse.unwrap_or("Battery unavailable").to_owned(),
                 |reading| {
@@ -180,16 +185,19 @@ pub fn readings_for_display(
 ) -> Vec<WidgetReading> {
     readings
         .iter()
-        .filter(|reading| {
+        .filter_map(|reading| {
             let placement = settings.placement(&reading.id);
-            (if edge {
+            let visible = (if edge {
                 placement.edge
             } else {
                 placement.taskbar
             })
-            .unwrap_or(edge || !reading.unavailable || reading.coarse.is_some())
+            .unwrap_or(edge || !reading.unavailable || reading.coarse.is_some());
+            visible.then(|| WidgetReading {
+                pinned: placement.pinned,
+                ..reading.clone()
+            })
         })
-        .cloned()
         .collect()
 }
 
@@ -243,11 +251,13 @@ struct WidgetState {
     hover: crate::edge_hover::Hover,
     taskbar_geometry: Option<(HWND, [i32; 4], u32)>,
     taskbar_hidden_since: Option<Instant>,
+    strip: HWND,
+    strip_parent: HWND,
     anchor: TaskbarAnchor,
     emit: Box<dyn Fn(WidgetEvent)>,
 }
 
-/// Owns one non-activating, transparent window and its callback state.
+/// Owns the edge window or a taskbar controller and its Explorer child strip.
 pub struct TaskbarWidget {
     hwnd: HWND,
     state: Box<RefCell<WidgetState>>,
@@ -338,6 +348,8 @@ impl TaskbarWidget {
             hover: Default::default(),
             taskbar_geometry: None,
             taskbar_hidden_since: None,
+            strip: null_mut(),
+            strip_parent: null_mut(),
             anchor: TaskbarAnchor::default(),
             edge,
             reveal: 0.0,
@@ -364,7 +376,13 @@ impl TaskbarWidget {
                 return None;
             }
             let hwnd = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+                WS_EX_TOOLWINDOW
+                    | WS_EX_NOACTIVATE
+                    | if edge {
+                        WS_EX_LAYERED | WS_EX_TOPMOST
+                    } else {
+                        0
+                    },
                 class.as_ptr(),
                 wide("GearDot").as_ptr(),
                 WS_POPUP,
@@ -389,7 +407,7 @@ impl TaskbarWidget {
         }
     }
 
-    pub fn update(&mut self, readings: Vec<WidgetReading>, options: WidgetOptions) {
+    pub fn update(&mut self, mut readings: Vec<WidgetReading>, options: WidgetOptions) {
         let mut state = self.state.borrow_mut();
         if state.edge {
             let now = Instant::now();
@@ -414,6 +432,19 @@ impl TaskbarWidget {
                 }
             }
         }
+        if !state.edge {
+            // A battery percentage change must not reorder existing taskbar icons.
+            readings.sort_by_key(|reading| {
+                (
+                    !reading.pinned,
+                    state
+                        .readings
+                        .iter()
+                        .position(|old| old.id == reading.id)
+                        .unwrap_or(usize::MAX),
+                )
+            });
+        }
         state.readings = readings;
         state.options = options;
         unsafe {
@@ -426,7 +457,9 @@ impl Drop for TaskbarWidget {
     fn drop(&mut self) {
         unsafe {
             KillTimer(self.hwnd, 1);
-            drop(std::mem::take(&mut self.state.get_mut().hover));
+            let state = self.state.get_mut();
+            destroy_strip(self.hwnd, state);
+            drop(std::mem::take(&mut state.hover));
             DestroyWindow(self.hwnd);
         }
     }
@@ -574,7 +607,10 @@ pub(crate) fn light_taskbar() -> bool {
 unsafe fn visibility(hwnd: HWND, state: &mut WidgetState, visible: bool) {
     if state.shown != visible {
         state.shown = visible;
-        ShowWindow(hwnd, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
+        let surface = if state.edge { hwnd } else { state.strip };
+        if !surface.is_null() {
+            ShowWindow(surface, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
+        }
     }
     if !visible {
         state.hover.hide();
@@ -644,27 +680,43 @@ unsafe fn foreground_covers_monitor(hwnd: HWND, taskbar: HWND, screen: RECT) -> 
         && bounds.bottom >= screen.bottom
 }
 
-unsafe fn keep_above_taskbar(hwnd: HWND, taskbar: HWND) {
-    let mut above = GetWindow(taskbar, GW_HWNDPREV);
-    for _ in 0..128 {
-        if above.is_null() {
-            break;
-        }
-        if above == hwnd {
-            return;
-        }
-        above = GetWindow(above, GW_HWNDPREV);
+unsafe fn strip_is_ours(controller: HWND, strip: HWND) -> bool {
+    !strip.is_null()
+        && GetWindowLongPtrW(strip, GWLP_USERDATA) == GetWindowLongPtrW(controller, GWLP_USERDATA)
+        && IsWindow(strip) != 0
+}
+
+unsafe fn destroy_strip(controller: HWND, state: &mut WidgetState) {
+    if strip_is_ours(controller, state.strip) {
+        DestroyWindow(state.strip);
     }
-    // Recover after Explorer raises the taskbar. Keep our layer stable between those changes.
-    SetWindowPos(
-        hwnd,
-        HWND_TOPMOST,
+    state.strip = null_mut();
+    state.strip_parent = null_mut();
+    state.shown = false;
+    state.last_layout = None;
+}
+
+unsafe fn taskbar_strip(controller: HWND, taskbar: HWND, state: &mut WidgetState) -> HWND {
+    if state.strip_parent == taskbar && strip_is_ours(controller, state.strip) {
+        return state.strip;
+    }
+    destroy_strip(controller, state);
+    state.strip = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_NOACTIVATE,
+        wide("G435BatteryTaskbarWidget").as_ptr(),
+        wide("GearDot").as_ptr(),
+        WS_CHILD | WS_CLIPSIBLINGS,
         0,
         0,
-        0,
-        0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        1,
+        1,
+        taskbar,
+        null_mut(),
+        GetModuleHandleW(null()),
+        GetWindowLongPtrW(controller, GWLP_USERDATA) as *const c_void,
     );
+    state.strip_parent = taskbar;
+    state.strip
 }
 
 unsafe fn taskbar_unavailable(hwnd: HWND, state: &mut WidgetState) {
@@ -712,7 +764,7 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
         taskbar_unavailable(hwnd, state);
         return;
     }
-    if state.edge && foreground_covers_monitor(hwnd, taskbar, monitor.rcMonitor) {
+    if foreground_covers_monitor(hwnd, taskbar, monitor.rcMonitor) {
         visibility(hwnd, state, false);
         return;
     }
@@ -802,8 +854,9 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
             .min(((h - px(4, dpi)).max(1) * 100 / px(18, dpi).max(1)) as u16)
             .max(70);
         let cell = px((57 * i32::from(scale) + 50) / 100, dpi);
+        let right = anchor - px(i32::from(state.options.offset), dpi);
         let slots = ((bar.right - bar.left) / 3 / cell)
-            .min((anchor - bar.left - px(12, dpi)) / cell)
+            .min((right - bar.left - px(12, dpi)) / cell)
             .min(visible_count);
         if slots <= 0 {
             taskbar_unavailable(hwnd, state);
@@ -811,16 +864,7 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
         }
         state.taskbar_hidden_since = None;
         let w = cell * slots;
-        (
-            (anchor - w - px(i32::from(state.options.offset), dpi)).max(bar.left + px(12, dpi)),
-            bar.top,
-            w,
-            h,
-            cell,
-            scale,
-            w,
-            0,
-        )
+        (right - w, bar.top, w, h, cell, scale, w, 0)
     };
     let light = if state.edge {
         state
@@ -881,10 +925,40 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
         reveal,
         progress,
     };
-    if state.last_layout.as_ref() != Some(&layout) {
-        if !paint(hwnd, &layout) {
+    let surface = if state.edge {
+        hwnd
+    } else {
+        taskbar_strip(hwnd, taskbar, state)
+    };
+    if surface.is_null() {
+        return;
+    }
+    let layout_changed = state.last_layout.as_ref() != Some(&layout);
+    if layout_changed {
+        if !paint(surface, &layout) {
             return;
         }
+    }
+    if !state.edge && (layout_changed || !GetWindow(surface, GW_HWNDPREV).is_null()) {
+        let mut position = POINT {
+            x: layout.x,
+            y: layout.y,
+        };
+        if ScreenToClient(taskbar, &mut position) == 0
+            || SetWindowPos(
+                surface,
+                HWND_TOP,
+                position.x,
+                position.y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOACTIVATE,
+            ) == 0
+        {
+            return;
+        }
+    }
+    if layout_changed {
         state.last_layout = Some(layout);
     }
     visibility(hwnd, state, true);
@@ -892,8 +966,6 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
         if let Some(layout) = state.last_layout.as_ref() {
             update_hover(hwnd, &mut state.hover, layout, monitor.rcWork);
         }
-    } else {
-        keep_above_taskbar(hwnd, taskbar);
     }
 }
 
@@ -989,7 +1061,7 @@ unsafe fn paint(hwnd: HWND, layout: &Layout) -> bool {
         UpdateLayeredWindow(
             hwnd,
             null_mut(),
-            &pos,
+            if layout.edge { &pos } else { null() },
             &size,
             dc,
             &src,
@@ -1072,7 +1144,11 @@ unsafe fn render_bitmap<T>(
         0
     };
     for (slot, reading) in layout.readings.iter().enumerate() {
-        let origin = cell * slot as i32;
+        let origin = if edge {
+            cell * slot as i32
+        } else {
+            taskbar_slot_origin(width, cell, slot)
+        };
         let (left, top) = if edge {
             (panel_width / 2 - s(7) - edge_content_offset, origin + s(17))
         } else {

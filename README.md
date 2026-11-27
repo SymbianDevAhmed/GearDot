@@ -109,11 +109,13 @@ Download a Windows x64 package from [GitHub Releases](https://github.com/Symbian
 
 | Package | How to use it |
 |---|---|
-| **EXE installer** | Run `GearDot-Setup-x64.exe` and open **GearDot** from the Start menu |
-| **MSI installer** | Run `GearDot-Setup-x64.msi` if you prefer Windows Installer |
+| **EXE installer** | Run `GearDot-Setup-x64.exe` and choose the installation folder in the wizard |
+| **MSI installer** | Run `GearDot-Setup-x64.msi` to install through Windows Installer |
 | **Portable ZIP** | Extract the full ZIP to a writable folder and run `GearDot.exe` |
 
-Choose one installer. For Portable, keep `portable.flag`, `GearDot-DeviceProbe.exe`, and `HeadsetControl.exe` alongside `GearDot.exe`. If an earlier test build is running, exit it from the notification area first. Windows Installer may require uninstalling a higher-numbered test MSI before installing the first stable release.
+Choose one installer. The EXE opens a classic setup wizard. Both installers let you choose the installation folder and select **Launch GearDot** at the end. Run the same installer again to **Repair** or **Uninstall**.
+
+For Portable, keep `portable.flag`, `GearDot-DeviceProbe.exe`, and `HeadsetControl.exe` alongside `GearDot.exe`. Exit GearDot from the notification area before installing an update. If you installed a preview with a higher version number, uninstall it in **Settings → Apps** before installing the stable release.
 
 ---
 
@@ -132,13 +134,13 @@ Choose one installer. For Portable, keep `portable.flag`, `GearDot-DeviceProbe.e
 
 | Option | What it does |
 |---|---|
-| **Taskbar indicator** | Show or hide battery readings alongside the Windows taskbar. |
+| **Taskbar indicator** | Show readings beside the notification area when the selected taskbar is visible. Existing readings keep their positions as new devices connect. |
 | **Screen-edge battery slider** | Show or hide the battery rings on the edge of the screen. |
 | **Mute battery and connection alerts** | Keep alerts muted until you turn this option off. |
 | **Temporary mute** | Mute alerts for one hour or until GearDot exits. Use **End temporary mute** to resume sooner. |
 | **Diagnostics** | Rescan devices or copy a report with detected devices, connection types, and available readings. |
 
-Changes on **Controls** apply immediately. On the **Settings** page, select **Save settings** to apply your changes.
+Changes on **Controls** apply immediately. On the **Settings** page, select **Save settings** to apply your changes. Closing the window or choosing another page prompts you to save, discard, or keep editing. **Restore defaults** loads the defaults for review before saving.
 
 ### Settings
 
@@ -149,7 +151,7 @@ Changes on **Controls** apply immediately. On the **Settings** page, select **Sa
 | **Device profiles** | Rename or hide a device, pin it to the top, and choose whether it appears in Devices, on the taskbar, or in the edge slider. The built-in G435 and MAD R profiles also support custom polling and low-battery settings. The MAD R profile adds a full-charge alert. |
 | **Slider and taskbar** | Choose whether the tray icon tracks the lowest available battery or a specific device. Adjust widget size, monitor, taskbar offset, charging animation, and the edge slider's accent, side, and vertical position. |
 | **Notifications** | Enable low-battery, full-charge, or reconnection alerts. Set the low-battery threshold from 5% to 50%, toggle sound, and send a test notification. Charging-related alerts depend on the device's available readings. |
-| **Backup and diagnostics** | Export saved settings, load a backup, reset to defaults, or open the data and logs folder. Select **Save settings** after loading a backup or resetting. |
+| **Backup and diagnostics** | Export saved settings, load a backup, or open the data and logs folder. Select **Save settings** after loading a backup. |
 
 Right-click the **GearDot** notification area icon to refresh readings, open **Battery details** or **Settings**, or exit the app.
 
