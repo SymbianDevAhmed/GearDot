@@ -187,12 +187,17 @@ if os.name == "nt":
     raise SystemExit
 
 args = [options.msibuild, msi]
+upgrade = subprocess.check_output([options.msiinfo, "export", msi, "Upgrade"], text=True)
+headers, types, keys, *rows = upgrade.splitlines()
+upgrade_rows = [row.split("\t") for row in rows if row]
+for row in upgrade_rows:
+    if row[-1] == "WIX_UPGRADE_DETECTED":
+        row[4] = str(int(row[4]) | 0x200)
+tables.append(table("Upgrade", headers, types, keys.split("\t", 1)[1], upgrade_rows))
 for path in tables:
     args += ["-i", path]
 args += ["-q", "UPDATE `Property` SET `Value` = 'INSTALLFOLDER;WIX_DOWNGRADE_DETECTED;WIX_UPGRADE_DETECTED' "
                "WHERE `Property` = 'SecureCustomProperties'",
          "-q", "UPDATE `InstallExecuteSequence` SET `Sequence` = 1501 "
-               "WHERE `Action` = 'RemoveExistingProducts'",
-         "-q", "UPDATE `Upgrade` SET `Attributes` = 513 "
-               "WHERE `ActionProperty` = 'WIX_UPGRADE_DETECTED'"]
+               "WHERE `Action` = 'RemoveExistingProducts'"]
 subprocess.run(args, cwd=folder, check=True)
