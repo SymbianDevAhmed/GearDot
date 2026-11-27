@@ -200,7 +200,7 @@ To build from source on Windows, install Rust 1.99 or newer, Visual Studio Build
 GearDot is released under the [GNU General Public License v3 or later](LICENSE). See the [third-party notices](THIRD-PARTY-NOTICES.txt) and [vendored source revisions](vendor/README.md) for BatteryHub, W.D.B.M, and HeadsetControl.
 
 > [!NOTE]
-> Unofficial project. GearDot is not affiliated with Logitech, VXE, or ATK.
+> GearDot is an independent project. Device models and manufacturer names are listed for compatibility reference. All trademarks belong to their respective owners.
 
 ---
 
