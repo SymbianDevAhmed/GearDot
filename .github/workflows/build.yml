@@ -10,6 +10,7 @@ on:
       - 'Cargo.lock'
       - 'build.rs'
       - 'assets/**'
+      - 'vendor/**'
       - 'installer/**'
       - '.github/workflows/build.yml'
   workflow_dispatch:
@@ -53,7 +54,7 @@ jobs:
         run: rustup component add rustfmt clippy
       - name: Check formatting
         run: |
-          if (git ls-files Cargo.lock) { cargo fmt --all -- --check }
+          if (git ls-files Cargo.lock) { cargo fmt -- --check }
           else { Write-Host "Initial source formatting is prepared separately." }
       - name: Run protocol and domain tests
         run: |
@@ -64,6 +65,22 @@ jobs:
       - name: Build portable executables
         if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
         run: cargo build --locked --release --bins
+      - uses: msys2/setup-msys2@v2
+        if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+      - name: Build the W.D.B.M device probe
+        if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
+        shell: msys2 {0}
+        env:
+          MSYS2_ARG_CONV_EXCL: '*'
+        run: |
+          cmd.exe /d /c 'vendor\wdbm-cpp\build.bat'
+          cp vendor/wdbm-cpp/BatteryHub.exe target/release/GearDot-DeviceProbe.exe
+      - name: Fetch verified HeadsetControl and corresponding source
+        if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
+        run: ./installer/get-headsetcontrol.ps1
       - name: Verify the Windows monitor stays running
         if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
         run: |
@@ -72,15 +89,18 @@ jobs:
           New-Item $folder -ItemType Directory -Force | Out-Null
           $exe = Join-Path $folder 'wireless-battery-monitor.exe'
           Copy-Item target/release/wireless-battery-monitor.exe $exe
+          Copy-Item target/release/GearDot-DeviceProbe.exe,target/release/HeadsetControl.exe $folder
           New-Item (Join-Path $folder 'portable.flag') -ItemType File -Force | Out-Null
-          $monitor = Start-Process -FilePath $exe -PassThru
+          $monitor = Start-Process -FilePath $exe -ArgumentList "--background" -PassThru
           try {
-            if ($monitor.WaitForExit(20000)) {
+            if ($monitor.WaitForExit(70000)) {
               throw "Monitor exited during the startup check. Exit code: $($monitor.ExitCode)"
             }
             $log = Get-Content (Join-Path $folder 'data/monitor.log') -Raw
-            if ($log -notmatch '\[device\]' -or $log -notmatch '\[bluetooth\] Connected-device probe responded') {
-              throw 'Monitor did not complete its first USB and Bluetooth checks.'
+            if ($log -notmatch '\[device\]' -or $log -notmatch '\[bluetooth\] Connected-device probe responded' -or
+                $log -notmatch '\[device driver\] batteryhub- responded' -or $log -notmatch '\[device driver\] wdbm- responded' -or
+                $log -notmatch '\[device driver\] headsetcontrol- responded') {
+              throw 'Monitor did not complete its initial connected-device checks.'
             }
             if ($log -match '\[(panic|runtime-error)\]') {
               throw 'Monitor logged a panic or a runtime error.'
@@ -95,7 +115,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $icon = Get-ChildItem target/release/build -Recurse -Filter wireless-battery-monitor.ico |
+          $icon = Get-ChildItem target/release/build -Recurse -Filter GearDot.ico |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $icon) { throw "Generated application icon missing" }
           $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
@@ -104,13 +124,34 @@ jobs:
           & $iscc "/DAppVersion=$env:VERSION" "/DAppIcon=$($icon.FullName)" "installer/setup.iss"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item target/release-package -ItemType Directory -Force | Out-Null
-          Copy-Item target/release/wireless-battery-monitor.exe,target/release/diagnostic.exe,target/installer/WirelessBatteryMonitor-Setup-x64.exe target/release-package/
+          Copy-Item target/release/diagnostic.exe,target/installer/GearDot-Setup-x64.exe target/release-package/
+          $stage = New-Item target/msi-files -ItemType Directory -Force
+          Copy-Item target/release/diagnostic.exe,target/release/GearDot-DeviceProbe.exe,target/release/HeadsetControl.exe,LICENSE,THIRD-PARTY-NOTICES.txt,installer/GearDot.wxs $stage
+          Copy-Item target/release/wireless-battery-monitor.exe (Join-Path $stage GearDot.exe)
+          Copy-Item $icon.FullName (Join-Path $stage GearDot.ico)
+          $wix = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
+          if (-not (Test-Path (Join-Path $wix candle.exe))) {
+            choco install wixtoolset --version 3.14.1 --no-progress -y
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Push-Location $stage
+          try {
+            & (Join-Path $wix candle.exe) -arch x64 "-dVersion=$env:VERSION" GearDot.wxs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & (Join-Path $wix light.exe) -sice:ICE38 -sice:ICE91 -out ../release-package/GearDot-Setup-x64.msi GearDot.wixobj
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
           $portable = "target/portable-files"
           New-Item $portable -ItemType Directory -Force | Out-Null
-          Copy-Item target/release/wireless-battery-monitor.exe,target/release/diagnostic.exe,THIRD-PARTY-NOTICES.txt $portable
+          Copy-Item target/release/wireless-battery-monitor.exe,target/release/diagnostic.exe,target/release/GearDot-DeviceProbe.exe,target/release/HeadsetControl.exe,LICENSE,THIRD-PARTY-NOTICES.txt $portable
+          Rename-Item "$portable/wireless-battery-monitor.exe" "GearDot.exe"
           Copy-Item installer/PORTABLE.txt "$portable/README.txt"
           Set-Content "$portable/portable.flag" "Portable mode" -Encoding ascii
-          Compress-Archive -Path "$portable/*" -DestinationPath target/release-package/WirelessBatteryMonitor-Portable.zip -Force
+          Compress-Archive -Path "$portable/*" -DestinationPath target/release-package/GearDot-Portable.zip -Force
+          git archive --format=zip --prefix="GearDot-$env:VERSION/" --output=target/release-package/GearDot-Source.zip HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $hashes = Get-ChildItem target/release-package -File | Sort-Object Name | ForEach-Object {
             "{0}  {1}" -f (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
           }
@@ -118,7 +159,7 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: github.event_name == 'workflow_dispatch' && (inputs.publish_release || inputs.package_private)
         with:
-          name: WirelessBatteryMonitor-windows-x64
+          name: GearDot-windows-x64
           path: target/release-package/
           if-no-files-found: error
 
@@ -131,7 +172,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v6
         with:
-          name: WirelessBatteryMonitor-windows-x64
+          name: GearDot-windows-x64
           path: dist
       - name: Publish tested stable release
         env:
@@ -141,7 +182,7 @@ jobs:
         run: |
           cd dist
           sha256sum -c SHA256SUMS.txt
-          gh release create "v$VERSION" wireless-battery-monitor.exe diagnostic.exe WirelessBatteryMonitor-Portable.zip WirelessBatteryMonitor-Setup-x64.exe SHA256SUMS.txt --target "$GITHUB_SHA" --title "Wireless Battery Monitor v$VERSION" --latest --notes "Windows x64 release. Persistent settings, optional sign-in startup, independent reconnection, single-instance handling, native low-battery and charge-complete notifications, MAD R charging/full status, per-device visibility, customised widget size and colour, charging animation, window themes, enhanced analytics, About, notification test, local logs, settings backups, battery profiles, power saving, sleep/wake recovery, taskbar selection, CSV export and Windows installer. Automated Rust tests passed. G435 charging state remains unavailable; its percentage is a voltage-based estimate."
+          gh release create "v$VERSION" diagnostic.exe GearDot-Portable.zip GearDot-Setup-x64.exe GearDot-Setup-x64.msi GearDot-Source.zip headsetcontrol-4.3.0.tar.gz SHA256SUMS.txt --target "$GITHUB_SHA" --title "GearDot v$VERSION" --latest --notes "GearDot for Windows x64. Includes the BatteryHub and W.D.B.M device readers, Portable and Installer builds, and corresponding source. Available battery readings vary by device and connection."
 
   prepare:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.prepare_sources && !inputs.publish_release && !inputs.package_private
@@ -156,10 +197,10 @@ jobs:
           rustup component add rustfmt clippy
           cargo update --workspace
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo fmt --all
+          cargo fmt
       - name: Verify formatting and locked tests
         run: |
-          cargo fmt --all -- --check
+          cargo fmt -- --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --all-targets
       - name: Run Clippy
