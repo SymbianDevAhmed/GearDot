@@ -37,13 +37,13 @@
 ## 🖼️ See GearDot in Action
 
 <p align="center">
-  <img src="docs/images/geardot-devices.png" width="470" alt="GearDot Devices view showing mouse, headset, earbuds, and keyboard readings">
+  <img src="docs/images/geardot-devices.png" width="470" alt="GearDot Devices view with distinct icons for the Logitech headset and Bluetooth earbuds">
 </p>
 
-**One view for your setup.** See your mouse, headset, earbuds, and keyboard together. Each device shows its connection type next to the available battery reading.
+**One view for your setup.** See your mouse, headset, earbuds, and keyboard together. Bluetooth earbuds have their own icon, and each device shows its connection type next to the available battery reading.
 
 <p align="center">
-  <img src="docs/images/geardot-taskbar.png" width="342" alt="GearDot taskbar display showing device icons with battery percentages">
+  <img src="docs/images/geardot-taskbar.png" width="342" alt="GearDot taskbar showing distinct headset and earbuds icons next to battery percentages">
 </p>
 
 **Battery levels at a glance.** Keep the percentages beside the Windows notification area while you work or play. Use **Controls** to enable the screen-edge slider if you prefer the battery rings there.
