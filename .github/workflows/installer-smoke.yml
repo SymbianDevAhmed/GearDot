@@ -1,0 +1,43 @@
+name: Test Windows installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag containing Windows installer assets
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download and verify release installers
+        shell: pwsh
+        run: |
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern GearDot-Setup-x64.exe --pattern GearDot-Setup-x64.msi --pattern SHA256SUMS.txt --dir installer-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $manifest = Get-Content installer-test/SHA256SUMS.txt
+          foreach ($file in 'GearDot-Setup-x64.exe','GearDot-Setup-x64.msi') {
+            $entry = $manifest | Where-Object { $_ -match ('  ' + [regex]::Escape($file) + '$') }
+            if (!$entry -or ($entry -split '\s+')[0] -ne (Get-FileHash "installer-test/$file" -Algorithm SHA256).Hash) {
+              throw "Checksum mismatch: $file"
+            }
+          }
+      - name: Install, start, and uninstall both packages
+        run: ./installer/test-installers.ps1 -PackageDirectory installer-test
+      - name: Keep installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-installer-logs
+          path: installer-test/*.log
+          if-no-files-found: ignore
