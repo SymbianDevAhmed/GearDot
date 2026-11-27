@@ -1,0 +1,17 @@
+[
+  {"id": "046D:0ADF", "name": "Logitech G435", "kind": "Headset", "receiver": true, "reader": "G435"},
+  {"id": "373B:1040", "name": "VXE MAD R", "kind": "Mouse", "receiver": true, "reader": "MadR"},
+  {"id": "373B:103F", "name": "VXE MAD R", "kind": "Mouse", "reader": "MadR"},
+  {"id": "054C:0CE6", "name": "DualSense", "kind": "Gamepad", "reader": "DualSenseUsb"},
+  {"id": "054C:0DF2", "name": "DualSense Edge", "kind": "Gamepad", "reader": "DualSenseUsb"},
+  {"id": "3151:5006", "name": "Akko Air 01", "kind": "Keyboard", "receiver": true},
+  {"id": "38EE:000C", "name": "Akko V9 Dash Pro", "kind": "Mouse", "receiver": true},
+  {"id": "38EE:000F", "name": "Akko Dash V9 Ultra", "kind": "Mouse", "receiver": true},
+  {"id": "3837:6011", "name": "MCHOSE V9 Pro 2", "kind": "Headset", "receiver": true},
+  {"id": "35D8:0133", "name": "MOONDROP GM01 Pro", "kind": "Headset", "receiver": true},
+  {"id": "046D:0B39", "name": "Logitech G321 LIGHTSPEED", "kind": "Headset", "receiver": true},
+  {"id": "046D:0AF7", "name": "Logitech PRO X 2 LIGHTSPEED", "kind": "Headset", "receiver": true},
+  {"id": "046D:0A66", "name": "Logitech G533", "kind": "Headset", "receiver": true},
+  {"id": "3537:10C6", "name": "GameSir G7 Pro 8K PC", "kind": "Gamepad", "receiver": true},
+  {"id": "3537:10C5", "name": "GameSir G7 Pro 8K PC", "kind": "Gamepad"}
+]

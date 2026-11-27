@@ -2,9 +2,9 @@
 use std::{collections::BTreeMap, io, mem::size_of, ptr::null_mut};
 use windows_sys::{
     core::GUID,
-    Win32::Devices::{DeviceAndDriverInstallation::*, Properties::*},
+    Win32::Devices::{Bluetooth::*, DeviceAndDriverInstallation::*, Properties::*},
 };
-use wireless_battery_monitor::preferences::BluetoothReading;
+use wireless_battery_monitor::preferences::{BluetoothReading, InputKind};
 
 const fn key(id: u128, pid: u32) -> DEVPROPKEY {
     DEVPROPKEY {
@@ -124,6 +124,7 @@ struct Device {
     connected: bool,
     root_name: Option<String>,
     battery: Option<(u64, u8, Option<String>)>,
+    kind: Option<InputKind>,
 }
 
 impl Device {
@@ -150,15 +151,23 @@ impl Device {
     }
 
     fn reading(self) -> Option<BluetoothReading> {
-        let (_, percent, profile_name) = self.battery?;
         if !self.connected {
             return None;
         }
+        let (percent, profile_name) = match self.battery {
+            Some((_, level, name)) => (Some(level), name),
+            None => (None, None),
+        };
         let name = self
             .root_name
             .or(profile_name)
             .unwrap_or_else(|| "Bluetooth device".into());
-        Some(BluetoothReading { name, percent })
+        Some(BluetoothReading {
+            id: String::new(),
+            name,
+            percent,
+            kind: self.kind,
+        })
     }
 }
 
@@ -238,14 +247,70 @@ fn connected_readings() -> io::Result<Vec<BluetoothReading>> {
         );
     }
 
-    let mut readings: Vec<_> = devices.into_values().filter_map(Device::reading).collect();
+    observe_classic_connections(&mut devices);
+    let mut readings: Vec<_> = devices
+        .into_iter()
+        .filter_map(|(address, device)| {
+            let mut reading = device.reading()?;
+            reading.id =
+                wireless_battery_monitor::preferences::local_id("bt-", &address.to_le_bytes());
+            Some(reading)
+        })
+        .collect();
     readings.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(readings)
+}
+
+fn observe_classic_connections(devices: &mut BTreeMap<u64, Device>) {
+    // Enumerate connections already known to Windows without starting discovery.
+    let mut search: BLUETOOTH_DEVICE_SEARCH_PARAMS = unsafe { std::mem::zeroed() };
+    search.dwSize = size_of::<BLUETOOTH_DEVICE_SEARCH_PARAMS>() as u32;
+    search.fReturnConnected = 1;
+    let mut info: BLUETOOTH_DEVICE_INFO = unsafe { std::mem::zeroed() };
+    info.dwSize = size_of::<BLUETOOTH_DEVICE_INFO>() as u32;
+    let handle = unsafe { BluetoothFindFirstDevice(&search, &mut info) };
+    if handle.is_null() {
+        return;
+    }
+    loop {
+        let address = unsafe { info.Address.Anonymous.ullLong } & 0xffff_ffff_ffff;
+        if address != 0 && info.fConnected != 0 {
+            let name = text(&info.szName);
+            let device = devices.entry(address).or_default();
+            device.observe(true, true, (!name.is_empty()).then_some(name), None);
+            device.kind = bluetooth_kind(info.ulClassofDevice);
+        }
+        if unsafe { BluetoothFindNextDevice(handle, &mut info) } == 0 {
+            break;
+        }
+    }
+    unsafe {
+        BluetoothFindDeviceClose(handle);
+    }
+}
+
+fn bluetooth_kind(class: u32) -> Option<InputKind> {
+    match ((class >> 8) & 0x1f, (class >> 2) & 0x3f) {
+        (0x04, 0x01 | 0x02 | 0x06) => Some(InputKind::Headset),
+        (0x05, minor) if minor & 0x10 != 0 => Some(InputKind::Keyboard),
+        (0x05, minor) if minor & 0x20 != 0 => Some(InputKind::Mouse),
+        (0x05, 0x01 | 0x02) => Some(InputKind::Gamepad),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interprets_classic_bluetooth_device_classes() {
+        assert_eq!(bluetooth_kind(0x0404), Some(InputKind::Headset));
+        assert_eq!(bluetooth_kind(0x0540), Some(InputKind::Keyboard));
+        assert_eq!(bluetooth_kind(0x0580), Some(InputKind::Mouse));
+        assert_eq!(bluetooth_kind(0x0508), Some(InputKind::Gamepad));
+        assert_eq!(bluetooth_kind(0x0414), None);
+    }
 
     #[test]
     fn classic_headset_uses_connection_from_root_and_battery_from_profile() {
@@ -264,7 +329,7 @@ mod tests {
         headset.observe(false, false, None, Some((12, 95)));
         let reading = headset.reading().unwrap();
         assert_eq!(reading.name, "Headset");
-        assert_eq!(reading.percent, 70);
+        assert_eq!(reading.percent, Some(70));
     }
 
     #[test]
@@ -274,12 +339,37 @@ mod tests {
         assert!(device.reading().is_none());
         let mut device = Device::default();
         device.observe(true, true, None, Some((10, 0)));
-        assert_eq!(device.reading().unwrap().percent, 0);
+        assert_eq!(device.reading().unwrap().percent, Some(0));
+    }
+
+    #[test]
+    fn connected_device_is_detected_without_a_battery_property() {
+        let mut device = Device::default();
+        device.observe(true, true, Some("New mouse".into()), None);
+        let reading = device.reading().unwrap();
+        assert_eq!(reading.name, "New mouse");
+        assert_eq!(reading.percent, None);
     }
 }
 
 // Keep the Windows Bluetooth APIs in a disposable process, outside the tray event loop.
 pub fn probe() -> std::io::Result<Vec<BluetoothReading>> {
+    run_probe(
+        &std::env::current_exe()?,
+        &["--bluetooth-probe"],
+        std::time::Duration::from_secs(10),
+        64 * 1024,
+        None,
+    )
+}
+
+pub(crate) fn run_probe<T: serde::de::DeserializeOwned>(
+    executable: &std::path::Path,
+    arguments: &[&str],
+    timeout: std::time::Duration,
+    max_response: u64,
+    accepted_error_code: Option<i32>,
+) -> std::io::Result<T> {
     use std::{
         io::{self, Read},
         os::windows::process::CommandExt,
@@ -289,9 +379,8 @@ pub fn probe() -> std::io::Result<Vec<BluetoothReading>> {
     };
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
-    const MAX_RESPONSE: u64 = 64 * 1024;
-    let mut child = Command::new(std::env::current_exe()?)
-        .arg("--bluetooth-probe")
+    let mut child = Command::new(executable)
+        .args(arguments)
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -301,18 +390,18 @@ pub fn probe() -> std::io::Result<Vec<BluetoothReading>> {
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| io::Error::other("Missing Bluetooth response pipe"))?;
+            .ok_or_else(|| io::Error::other("Missing device probe response pipe"))?;
         let response = scope.spawn(move || {
             let mut bytes = Vec::new();
-            stdout.take(MAX_RESPONSE + 1).read_to_end(&mut bytes)?;
-            if bytes.len() as u64 > MAX_RESPONSE {
+            stdout.take(max_response + 1).read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > max_response {
                 return Err(io::Error::other(
-                    "Bluetooth response exceeded the size limit",
+                    "Device probe response exceeded the size limit",
                 ));
             }
             Ok(bytes)
         });
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + timeout;
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
@@ -320,7 +409,7 @@ pub fn probe() -> std::io::Result<Vec<BluetoothReading>> {
                 Ok(None) => {
                     break Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        "Bluetooth probe timed out",
+                        "Device probe timed out",
                     ))
                 }
                 Err(error) => break Err(error),
@@ -332,12 +421,13 @@ pub fn probe() -> std::io::Result<Vec<BluetoothReading>> {
         }
         let bytes = response
             .join()
-            .map_err(|_| io::Error::other("Bluetooth response reader panicked"))??;
+            .map_err(|_| io::Error::other("Device probe response reader panicked"))??;
         let status = status?;
-        if !status.success() {
+        if !status.success() && !accepted_error_code.is_some_and(|code| status.code() == Some(code))
+        {
             let code = status.code().unwrap_or(-1) as u32;
             return Err(io::Error::other(format!(
-                "Bluetooth probe exited with 0x{code:08X}"
+                "Device probe exited with 0x{code:08X}"
             )));
         }
         serde_json::from_slice(&bytes).map_err(io::Error::other)

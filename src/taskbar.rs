@@ -1,4 +1,6 @@
 //! A compact native Windows taskbar indicator. No Explorer injection or hooks.
+use crate::{icon::DeviceGlyph, taskbar_anchor::TaskbarAnchor};
+use eframe::egui;
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -9,11 +11,20 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
-    Graphics::Gdi::*,
+    Graphics::{
+        Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS},
+        Gdi::*,
+    },
     System::{LibraryLoader::GetModuleHandleW, Registry::*},
     UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::*},
 };
-use wireless_battery_monitor::preferences::WidgetOptions;
+use wireless_battery_monitor::{
+    battery::DeviceKind,
+    palette::{Palette, Rgb},
+    preferences::{
+        device_order, EdgeSide, InputCharge, LiveSnapshot, Settings, Theme, WidgetOptions,
+    },
+};
 
 #[derive(Clone, Copy, Debug)]
 pub enum WidgetEvent {
@@ -29,11 +40,157 @@ pub enum WidgetEvent {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WidgetReading {
     pub id: String,
+    pub name: String,
+    pub detail: String,
+    pub connection: &'static str,
     pub glyph: crate::icon::DeviceGlyph,
     pub level: u8,
+    pub unavailable: bool,
     pub charging: bool,
     pub full: bool,
     pub low_threshold: u8,
+    pub coarse: Option<&'static str>,
+    pub stale: bool,
+    pub estimated: bool,
+}
+
+impl WidgetReading {
+    pub fn low(&self) -> bool {
+        !self.stale
+            && !self.charging
+            && (matches!(self.coarse, Some("Low" | "Empty"))
+                || (!self.unavailable && self.level <= self.low_threshold))
+    }
+
+    pub fn battery_summary(&self) -> String {
+        format!("{}: {}", self.name, self.detail)
+    }
+}
+
+pub fn widget_readings(
+    settings: &Settings,
+    snapshot: &LiveSnapshot,
+    now: u64,
+) -> Vec<WidgetReading> {
+    let options = settings.widget_options();
+    let mut readings = Vec::new();
+    for (kind, visible) in DeviceKind::ALL.into_iter().zip(options.visible) {
+        let reading = &snapshot.devices[kind.index()];
+        let Some(level) = reading.level.filter(|_| visible && reading.online()) else {
+            continue;
+        };
+        let prefix = if reading.estimated { "~" } else { "" };
+        readings.push(WidgetReading {
+            id: kind.profile_id().into(),
+            name: settings.device_name(kind).to_owned(),
+            detail: format!("{prefix}{level}% · {}", reading.state_label()),
+            connection: reading.connection.label(),
+            glyph: if kind == DeviceKind::Headset {
+                DeviceGlyph::Headset
+            } else {
+                DeviceGlyph::Mouse
+            },
+            level,
+            unavailable: false,
+            charging: reading.charging == Some(true),
+            full: reading.confirmed_full(),
+            low_threshold: settings.profile(kind).low_threshold,
+            estimated: reading.estimated,
+            ..Default::default()
+        });
+    }
+    for reading in snapshot.connected_bluetooth(now) {
+        let id = reading.profile_id();
+        if !settings.detected_visible(&id) {
+            continue;
+        }
+        let name = settings.detected_name(&id, &reading.name).to_owned();
+        readings.push(WidgetReading {
+            id: id.into_owned(),
+            name,
+            detail: reading
+                .percent
+                .map_or_else(|| "Battery unavailable".into(), |level| format!("{level}%")),
+            connection: "Bluetooth",
+            glyph: DeviceGlyph::for_bluetooth(&reading.name, reading.kind),
+            level: reading.percent.unwrap_or_default(),
+            unavailable: reading.percent.is_none(),
+            low_threshold: settings.low_threshold,
+            ..Default::default()
+        });
+    }
+    for input in snapshot.connected_inputs(now) {
+        let id = input.profile_id();
+        if !settings.detected_visible(&id) {
+            continue;
+        }
+        let name = settings.detected_name(&id, &input.name).to_owned();
+        let battery = input.battery;
+        let coarse = input.status.level_label();
+        readings.push(WidgetReading {
+            id: id.into_owned(),
+            name,
+            glyph: DeviceGlyph::for_detected(&input.name, input.kind, input.connection()),
+            connection: input.connection().label(),
+            unavailable: battery.is_none(),
+            coarse,
+            low_threshold: settings.low_threshold,
+            level: battery.map_or(0, |reading| reading.percent),
+            full: battery
+                .is_some_and(|reading| reading.charge == InputCharge::Full && !reading.stale),
+            charging: battery
+                .is_some_and(|reading| reading.charge == InputCharge::Charging && !reading.stale),
+            stale: battery.is_some_and(|reading| reading.stale),
+            estimated: battery.is_some_and(|reading| reading.estimated),
+            detail: battery.map_or_else(
+                || coarse.unwrap_or("Battery unavailable").to_owned(),
+                |reading| {
+                    let prefix = if reading.estimated { "~" } else { "" };
+                    if reading.stale {
+                        format!(
+                            "{prefix}{}% · last read {}s ago",
+                            reading.percent,
+                            now.saturating_sub(reading.checked_at)
+                        )
+                    } else {
+                        format!(
+                            "{prefix}{}% · {}",
+                            reading.percent,
+                            input.connection().label()
+                        )
+                    }
+                },
+            ),
+        });
+    }
+    readings.sort_by_key(|reading| {
+        device_order(
+            settings.placement(&reading.id).pinned,
+            reading.low(),
+            (!reading.unavailable).then_some(reading.level),
+        )
+    });
+    readings
+}
+
+pub fn readings_for_display(
+    readings: &[WidgetReading],
+    settings: &Settings,
+    edge: bool,
+) -> Vec<WidgetReading> {
+    readings
+        .iter()
+        .filter(|reading| {
+            let placement = settings.placement(&reading.id);
+            (if edge {
+                placement.edge
+            } else {
+                placement.taskbar
+            })
+            .unwrap_or(edge || !reading.unavailable || reading.coarse.is_some())
+        })
+        .cloned()
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,6 +228,7 @@ impl RingMotion {
 
 struct WidgetState {
     options: WidgetOptions,
+    system_light: bool,
     phase: bool,
     readings: Vec<WidgetReading>,
     motion: BTreeMap<String, RingMotion>,
@@ -82,6 +240,10 @@ struct WidgetState {
     shown: bool,
     render_failed: bool,
     last_layout: Option<Layout>,
+    hover: crate::edge_hover::Hover,
+    taskbar_geometry: Option<(HWND, [i32; 4], u32)>,
+    taskbar_hidden_since: Option<Instant>,
+    anchor: TaskbarAnchor,
     emit: Box<dyn Fn(WidgetEvent)>,
 }
 
@@ -96,15 +258,6 @@ fn wide(s: &str) -> Vec<u16> {
 }
 fn px(n: i32, dpi: u32) -> i32 {
     (n * dpi as i32 + 48) / 96
-}
-fn timer_ms(state: &WidgetState) -> u32 {
-    if state.edge {
-        40
-    } else if state.options.power_saving {
-        2000
-    } else {
-        750
-    }
 }
 
 unsafe fn taskbar_for(slot: u8) -> HWND {
@@ -170,6 +323,11 @@ impl TaskbarWidget {
         emit: impl Fn(WidgetEvent) + 'static,
     ) -> Option<Self> {
         let mut state = Box::new(RefCell::new(WidgetState {
+            system_light: if edge {
+                crate::runtime::system_light_theme()
+            } else {
+                light_taskbar()
+            },
             options,
             phase: false,
             readings: Vec::new(),
@@ -177,6 +335,10 @@ impl TaskbarWidget {
             shown: false,
             render_failed: false,
             last_layout: None,
+            hover: Default::default(),
+            taskbar_geometry: None,
+            taskbar_hidden_since: None,
+            anchor: TaskbarAnchor::default(),
             edge,
             reveal: 0.0,
             last_frame: Instant::now(),
@@ -204,7 +366,7 @@ impl TaskbarWidget {
             let hwnd = CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
                 class.as_ptr(),
-                wide("Wireless Battery Monitor").as_ptr(),
+                wide("GearDot").as_ptr(),
                 WS_POPUP,
                 0,
                 0,
@@ -218,7 +380,7 @@ impl TaskbarWidget {
             if hwnd.is_null() {
                 return None;
             }
-            if SetTimer(hwnd, 1, timer_ms(&state.borrow()), None) == 0 {
+            if SetTimer(hwnd, 1, if edge { 40 } else { 125 }, None) == 0 {
                 DestroyWindow(hwnd);
                 return None;
             }
@@ -253,13 +415,7 @@ impl TaskbarWidget {
             }
         }
         state.readings = readings;
-        let timer = timer_ms(&state);
         state.options = options;
-        if timer != timer_ms(&state) {
-            unsafe {
-                SetTimer(self.hwnd, 1, timer_ms(&state), None);
-            }
-        }
         unsafe {
             refresh_safely(self.hwnd, &mut state);
         }
@@ -270,6 +426,7 @@ impl Drop for TaskbarWidget {
     fn drop(&mut self) {
         unsafe {
             KillTimer(self.hwnd, 1);
+            drop(std::mem::take(&mut self.state.get_mut().hover));
             DestroyWindow(self.hwnd);
         }
     }
@@ -350,7 +507,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             0
         }
         WM_SETTINGCHANGE | WM_DISPLAYCHANGE | WM_DPICHANGED => {
-            state.last_layout = None;
+            state.system_light = if state.edge {
+                crate::runtime::system_light_theme()
+            } else {
+                light_taskbar()
+            };
             refresh_safely(hwnd, &mut state);
             0
         }
@@ -391,21 +552,23 @@ unsafe fn context_menu(hwnd: HWND, state: &WidgetState) {
     }
 }
 
-unsafe fn light_taskbar() -> bool {
+pub(crate) fn light_taskbar() -> bool {
     let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
     let value = wide("SystemUsesLightTheme");
     let mut data: u32 = 0;
     let mut length = size_of::<u32>() as u32;
-    RegGetValueW(
-        HKEY_CURRENT_USER,
-        key.as_ptr(),
-        value.as_ptr(),
-        RRF_RT_REG_DWORD,
-        null_mut(),
-        (&mut data as *mut u32).cast(),
-        &mut length,
-    ) == 0
-        && data != 0
+    unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_DWORD,
+            null_mut(),
+            (&mut data as *mut u32).cast(),
+            &mut length,
+        ) == 0
+            && data != 0
+    }
 }
 
 unsafe fn visibility(hwnd: HWND, state: &mut WidgetState, visible: bool) {
@@ -414,6 +577,7 @@ unsafe fn visibility(hwnd: HWND, state: &mut WidgetState, visible: bool) {
         ShowWindow(hwnd, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
     }
     if !visible {
+        state.hover.hide();
         state.last_layout = None;
         state.reveal = 0.0;
         state.keep_open_until = Instant::now();
@@ -443,8 +607,86 @@ unsafe fn refresh_safely(hwnd: HWND, state: &mut WidgetState) {
     }
 }
 
+unsafe fn foreground_covers_monitor(hwnd: HWND, taskbar: HWND, screen: RECT) -> bool {
+    let foreground = GetForegroundWindow();
+    if foreground.is_null()
+        || foreground == hwnd
+        || foreground == taskbar
+        || foreground == GetShellWindow()
+    {
+        return false;
+    }
+
+    // The notification overflow and other Explorer flyouts are shell UI.
+    let mut foreground_process = 0;
+    let mut taskbar_process = 0;
+    GetWindowThreadProcessId(foreground, &mut foreground_process);
+    GetWindowThreadProcessId(taskbar, &mut taskbar_process);
+    if foreground_process != 0 && foreground_process == taskbar_process {
+        return false;
+    }
+
+    // GetWindowRect can extend under the taskbar for an ordinary maximised window.
+    let mut bounds: RECT = zeroed();
+    if DwmGetWindowAttribute(
+        foreground,
+        DWMWA_EXTENDED_FRAME_BOUNDS as u32,
+        (&mut bounds as *mut RECT).cast(),
+        size_of::<RECT>() as u32,
+    ) < 0
+        && (IsZoomed(foreground) != 0 || GetWindowRect(foreground, &mut bounds) == 0)
+    {
+        return false;
+    }
+    bounds.left <= screen.left
+        && bounds.top <= screen.top
+        && bounds.right >= screen.right
+        && bounds.bottom >= screen.bottom
+}
+
+unsafe fn keep_above_taskbar(hwnd: HWND, taskbar: HWND) {
+    let mut above = GetWindow(taskbar, GW_HWNDPREV);
+    for _ in 0..128 {
+        if above.is_null() {
+            break;
+        }
+        if above == hwnd {
+            return;
+        }
+        above = GetWindow(above, GW_HWNDPREV);
+    }
+    // Recover after Explorer raises the taskbar. Keep our layer stable between those changes.
+    SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+    );
+}
+
+unsafe fn taskbar_unavailable(hwnd: HWND, state: &mut WidgetState) {
+    let now = Instant::now();
+    let since = *state.taskbar_hidden_since.get_or_insert(now);
+    if state.edge || now.duration_since(since) >= Duration::from_millis(750) {
+        visibility(hwnd, state, false);
+    }
+}
+
 unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
-    if state.edge && !state.options.edge {
+    let enabled = if state.edge {
+        state.options.edge
+    } else {
+        state.options.taskbar
+    };
+    if !enabled {
+        visibility(hwnd, state, false);
+        return;
+    }
+    let visible_count = state.readings.len() as i32;
+    if visible_count == 0 {
         visibility(hwnd, state, false);
         return;
     }
@@ -457,7 +699,7 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
     let mut bar: RECT = zeroed();
     let mut notify: RECT = zeroed();
     if taskbar.is_null() || IsWindowVisible(taskbar) == 0 || GetWindowRect(taskbar, &mut bar) == 0 {
-        visibility(hwnd, state, false);
+        taskbar_unavailable(hwnd, state);
         return;
     }
     let mut monitor: MONITORINFO = zeroed();
@@ -467,54 +709,42 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
         &mut monitor,
     ) == 0
     {
-        visibility(hwnd, state, false);
+        taskbar_unavailable(hwnd, state);
         return;
     }
-    // Suppress the overlay when a foreground fullscreen app covers the monitor.
-    let foreground = GetForegroundWindow();
-    if !foreground.is_null()
-        && foreground != hwnd
-        && foreground != taskbar
-        && foreground != GetShellWindow()
-    {
-        let mut full: RECT = zeroed();
-        let screen = monitor.rcMonitor;
-        if GetWindowRect(foreground, &mut full) != 0
-            && full.left <= screen.left
-            && full.top <= screen.top
-            && full.right >= screen.right
-            && full.bottom >= screen.bottom
-        {
-            visibility(hwnd, state, false);
-            return;
-        }
+    if state.edge && foreground_covers_monitor(hwnd, taskbar, monitor.rcMonitor) {
+        visibility(hwnd, state, false);
+        return;
     }
     let dpi = GetDpiForWindow(taskbar).max(96);
-    let visible_count = state.readings.len() as i32;
-    if visible_count == 0 {
-        visibility(hwnd, state, false);
-        return;
-    }
     let (x, y, w, h, cell, scale, panel_width, reveal) = if state.edge {
         let work = monitor.rcWork;
         let scale = state.options.scale;
         let cell = px((56 * i32::from(scale) + 50) / 100, dpi);
         let panel_width = px((56 * i32::from(scale) + 50) / 100, dpi);
-        let available = ((work.bottom - work.top - px(16, dpi)) / cell).min(visible_count);
-        if available == 0 || work.right - work.left < panel_width {
+        let work_height = work.bottom - work.top;
+        let available = ((work_height - px(16, dpi)) / cell).min(visible_count);
+        if available <= 0 || work.right - work.left < panel_width {
             visibility(hwnd, state, false);
             return;
         }
         let panel_height = cell * available + px(10, dpi);
         let grip_width = px(6, dpi);
         let grip_height = px(50, dpi);
-        let middle = work.top + (work.bottom - work.top) / 2;
+        let half_height = (panel_height.max(grip_height) + 1) / 2;
+        let middle = work.top
+            + half_height
+            + (work_height - 2 * half_height) * i32::from(state.options.edge_height_percent) / 100;
+        let left = state.options.edge_side == EdgeSide::Left;
+        let hit_width = grip_width.max(state.last_layout.as_ref().map_or(0, |layout| layout.w));
+        let hit_left = if left {
+            work.left
+        } else {
+            work.right - hit_width
+        };
         let mut cursor: POINT = zeroed();
         let over_panel = GetCursorPos(&mut cursor) != 0
-            && cursor.x
-                >= work.right
-                    - grip_width.max(state.last_layout.as_ref().map_or(0, |layout| layout.w))
-            && cursor.x < work.right
+            && (hit_left..hit_left + hit_width).contains(&cursor.x)
             && (cursor.y - middle).abs()
                 <= grip_height.max(state.last_layout.as_ref().map_or(0, |layout| layout.h)) / 2;
         let now = Instant::now();
@@ -536,52 +766,51 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
         } else {
             panel_height
         };
-        (
-            work.right - w,
-            middle - h / 2,
-            w,
-            h,
-            cell,
-            scale,
-            panel_width,
-            reveal,
-        )
+        let x = if left { work.left } else { work.right - w };
+        (x, middle - h / 2, w, h, cell, scale, panel_width, reveal)
     } else {
         let h = bar.bottom - bar.top;
+        let shown_height =
+            bar.bottom.min(monitor.rcMonitor.bottom) - bar.top.max(monitor.rcMonitor.top);
+        if h < px(20, dpi) || bar.right - bar.left < h * 4 || shown_height < h / 2 {
+            taskbar_unavailable(hwnd, state);
+            return;
+        }
+        let geometry = (taskbar, [bar.left, bar.top, bar.right, bar.bottom], dpi);
+        if state.taskbar_geometry != Some(geometry) {
+            state.taskbar_geometry = Some(geometry);
+            state.anchor = TaskbarAnchor::default();
+        }
         let primary = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
-        let anchor = if !tray.is_null()
-            && GetWindowRect(tray, &mut notify) != 0
-            && notify.right > notify.left
-        {
-            notify.left
-        } else if taskbar != primary {
+        let fallback = if taskbar != primary {
             bar.right - px(150, dpi)
         } else {
             bar.right - px(250, dpi)
         };
+        let measured = (!tray.is_null()
+            && GetWindowRect(tray, &mut notify) != 0
+            && notify.right > notify.left
+            && notify.left > bar.left
+            && notify.left <= bar.right
+            && notify.top < bar.bottom
+            && notify.bottom > bar.top)
+            .then_some(notify.left);
+        let anchor = state.anchor.position(measured, fallback, Instant::now());
         let scale = state
             .options
             .scale
             .min(((h - px(4, dpi)).max(1) * 100 / px(18, dpi).max(1)) as u16)
             .max(70);
         let cell = px((57 * i32::from(scale) + 50) / 100, dpi);
-        let slots = ((bar.right - bar.left) / 3 / cell).min(visible_count);
-        if slots == 0 {
-            visibility(hwnd, state, false);
+        let slots = ((bar.right - bar.left) / 3 / cell)
+            .min((anchor - bar.left - px(12, dpi)) / cell)
+            .min(visible_count);
+        if slots <= 0 {
+            taskbar_unavailable(hwnd, state);
             return;
         }
+        state.taskbar_hidden_since = None;
         let w = cell * slots;
-        let shown_height =
-            bar.bottom.min(monitor.rcMonitor.bottom) - bar.top.max(monitor.rcMonitor.top);
-        if h < px(20, dpi)
-            || bar.right - bar.left < h * 4
-            || shown_height < h / 2
-            || anchor < bar.left + w + px(12, dpi)
-            || anchor > bar.right
-        {
-            visibility(hwnd, state, false);
-            return;
-        }
         (
             (anchor - w - px(i32::from(state.options.offset), dpi)).max(bar.left + px(12, dpi)),
             bar.top,
@@ -593,7 +822,18 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
             0,
         )
     };
-    let light = !state.edge && light_taskbar();
+    let light = if state.edge {
+        state
+            .options
+            .visual_theme
+            .is_light(match state.options.theme {
+                Theme::System => state.system_light,
+                Theme::Light => true,
+                Theme::Dark => false,
+            })
+    } else {
+        state.system_light
+    };
     let slots = if state.edge {
         if reveal > 0 {
             h / cell
@@ -614,14 +854,10 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
         readings
             .iter()
             .map(|reading| {
-                let level = if state.options.power_saving {
-                    f32::from(reading.level)
-                } else {
-                    state
-                        .motion
-                        .get(&reading.id)
-                        .map_or(f32::from(reading.level), |motion| motion.current(now))
-                };
+                let level = state
+                    .motion
+                    .get(&reading.id)
+                    .map_or(f32::from(reading.level), |motion| motion.current(now));
                 (level * 10.0).round() as u16
             })
             .collect()
@@ -647,43 +883,142 @@ unsafe fn refresh_layout(hwnd: HWND, state: &mut WidgetState) {
     };
     if state.last_layout.as_ref() != Some(&layout) {
         if !paint(hwnd, &layout) {
-            visibility(hwnd, state, false);
             return;
         }
         state.last_layout = Some(layout);
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
     }
     visibility(hwnd, state, true);
+    if state.edge {
+        if let Some(layout) = state.last_layout.as_ref() {
+            update_hover(hwnd, &mut state.hover, layout, monitor.rcWork);
+        }
+    } else {
+        keep_above_taskbar(hwnd, taskbar);
+    }
+}
+
+fn update_hover(owner: HWND, hover: &mut crate::edge_hover::Hover, layout: &Layout, work: RECT) {
+    let mut cursor = POINT { x: 0, y: 0 };
+    let inside = layout.w == layout.panel_width
+        && layout.reveal != 0
+        && unsafe { GetCursorPos(&mut cursor) } != 0
+        && (layout.x..layout.x + layout.w).contains(&cursor.x)
+        && (layout.y..layout.y + layout.h).contains(&cursor.y);
+    let slot = (cursor.y.saturating_sub(layout.y) / layout.cell) as usize;
+    let Some(reading) = layout.readings.get(slot).filter(|_| inside) else {
+        hover.hide();
+        return;
+    };
+    let dpi = layout.dpi;
+    let width = px(258, dpi);
+    let height = px(59, dpi);
+    let gap = px(8, dpi);
+    if work.right - work.left < width + layout.w + gap || work.bottom - work.top < height {
+        hover.hide();
+        return;
+    }
+    let x = if layout.options.edge_side == EdgeSide::Left {
+        layout.x + layout.w + gap
+    } else {
+        layout.x - width - gap
+    };
+    let y = (layout.y + slot as i32 * layout.cell + (layout.cell - height) / 2)
+        .clamp(work.top, work.bottom - height);
+    let palette = layout.options.visual_theme.palette(layout.light);
+    let value = reading
+        .detail
+        .split(" · ")
+        .next()
+        .unwrap_or(&reading.detail);
+    let connection = match reading.connection {
+        "" | "Unknown" => "Connected",
+        value => value,
+    };
+    let status = if reading.stale {
+        reading.detail.clone()
+    } else if reading.low() {
+        format!("{value} · Low battery")
+    } else if reading.full {
+        "Fully charged · 100%".into()
+    } else if reading.charging {
+        format!("Charging · {value}")
+    } else if reading.unavailable && reading.coarse.is_none() && connection == "Wired" {
+        "Wired".into()
+    } else {
+        format!("{connection} · {value}")
+    };
+    hover.show(
+        owner,
+        crate::edge_hover::Card {
+            x,
+            y,
+            width,
+            height,
+            dpi,
+            name: reading.name.clone(),
+            status,
+            surface: palette.surface,
+            border: palette.border,
+            title: palette.text,
+            text: if reading.unavailable && reading.coarse.is_none() || reading.stale {
+                palette.muted
+            } else {
+                reading_colour(layout, palette, reading)
+            },
+        },
+    );
 }
 
 unsafe fn paint(hwnd: HWND, layout: &Layout) -> bool {
+    render_bitmap(layout, |dc, _| {
+        let pos = POINT {
+            x: layout.x,
+            y: layout.y,
+        };
+        let src = POINT { x: 0, y: 0 };
+        let size = SIZE {
+            cx: layout.w,
+            cy: layout.h,
+        };
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+        UpdateLayeredWindow(
+            hwnd,
+            null_mut(),
+            &pos,
+            &size,
+            dc,
+            &src,
+            0,
+            &blend,
+            ULW_ALPHA,
+        ) != 0
+    })
+    .unwrap_or(false)
+}
+
+unsafe fn render_bitmap<T>(
+    layout: &Layout,
+    use_pixels: impl FnOnce(HDC, &[u32]) -> T,
+) -> Option<T> {
     let Layout {
-        x,
-        y,
         w: width,
         h: height,
         dpi,
-        light,
         cell,
         scale,
         options,
-        phase,
         edge,
         panel_width,
-        reveal,
         ..
     } = *layout;
     let dc = CreateCompatibleDC(null_mut());
     if dc.is_null() {
-        return false;
+        return None;
     }
     let mut info: BITMAPINFO = zeroed();
     info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
@@ -699,7 +1034,7 @@ unsafe fn paint(hwnd: HWND, layout: &Layout) -> bool {
             DeleteObject(bitmap);
         }
         DeleteDC(dc);
-        return false;
+        return None;
     }
     let old_bitmap = SelectObject(dc, bitmap);
     let count = (width * height) as usize;
@@ -731,29 +1066,37 @@ unsafe fn paint(hwnd: HWND, layout: &Layout) -> bool {
         wide("Segoe UI").as_ptr(),
     );
     let old_font = SelectObject(dc, font);
+    let edge_content_offset = if edge && options.edge_side == EdgeSide::Left {
+        panel_width - width
+    } else {
+        0
+    };
     for (slot, reading) in layout.readings.iter().enumerate() {
         let origin = cell * slot as i32;
         let (left, top) = if edge {
-            (panel_width / 2 - s(7), origin + s(17))
+            (panel_width / 2 - s(7) - edge_content_offset, origin + s(17))
         } else {
             (origin + s(2), (height - s(17)) / 2)
         };
         let glyph_size = |unit| if edge { s(unit * 4 / 5) } else { s(unit) };
         draw_glyph(dc, left, top, glyph_size, reading.glyph);
-        let label = if reading.full {
+        let prefix = if reading.estimated { "~" } else { "" };
+        let label = if reading.unavailable {
+            reading.coarse.unwrap_or("—").to_owned()
+        } else if reading.full {
             "Full".to_owned()
         } else if reading.charging {
-            format!("{}%⚡", reading.level)
+            format!("{prefix}{}%⚡", reading.level)
         } else {
-            format!("{}%", reading.level)
+            format!("{prefix}{}%", reading.level)
         };
         let text = wide(&label);
         let (mut rect, align) = if edge {
             (
                 RECT {
-                    left: 0,
+                    left: -edge_content_offset,
                     top: origin + s(39),
-                    right: panel_width,
+                    right: panel_width - edge_content_offset,
                     bottom: origin + cell + s(2),
                 },
                 DT_CENTER,
@@ -783,78 +1126,140 @@ unsafe fn paint(hwnd: HWND, layout: &Layout) -> bool {
     SelectObject(dc, old_pen);
     DeleteObject(pen);
     GdiFlush();
+    let palette = if layout.edge {
+        layout.options.visual_theme.palette(layout.light)
+    } else {
+        Palette::for_theme(layout.light)
+    };
     let pixels = std::slice::from_raw_parts_mut(bits.cast::<u32>(), count);
     for (index, pixel) in pixels.iter_mut().enumerate() {
         let x = (index % width as usize) as i32;
         let y = (index / width as usize) as i32;
         let coverage = (*pixel & 0xff) as f32 / 255.0;
         if edge {
-            *pixel = edge_pixel(layout, x, y, coverage);
+            *pixel = edge_pixel(layout, palette, x, y, coverage);
         } else if let Some(reading) = layout.readings.get((x / cell) as usize) {
-            *pixel = blend_pixel(0, reading_colour(layout, reading), coverage);
+            let label_start = px((21 * i32::from(layout.scale) + 50) / 100, layout.dpi);
+            let ink = if x % cell < label_start {
+                reading.glyph.tint(layout.light)
+            } else {
+                reading_colour(layout, palette, reading)
+            };
+            *pixel = blend_pixel(0, ink, coverage);
         }
     }
-    let pos = POINT { x, y };
-    let src = POINT { x: 0, y: 0 };
-    let size = SIZE {
-        cx: width,
-        cy: height,
-    };
-    let blend = BLENDFUNCTION {
-        BlendOp: AC_SRC_OVER as u8,
-        BlendFlags: 0,
-        SourceConstantAlpha: 255,
-        AlphaFormat: AC_SRC_ALPHA as u8,
-    };
-    let okay = UpdateLayeredWindow(
-        hwnd,
-        null_mut(),
-        &pos,
-        &size,
-        dc,
-        &src,
-        0,
-        &blend,
-        ULW_ALPHA,
-    ) != 0;
+    let result = use_pixels(dc, pixels);
     SelectObject(dc, old_bitmap);
     DeleteObject(bitmap);
     DeleteDC(dc);
-    okay
+    Some(result)
 }
 
-type Rgb = (u32, u32, u32);
+#[derive(Default)]
+pub struct WidgetPreview(Option<(Layout, egui::TextureHandle)>);
 
-fn reading_colour(layout: &Layout, reading: &WidgetReading) -> Rgb {
-    if reading.full {
-        return if layout.light {
-            (0, 115, 60)
-        } else {
-            (105, 227, 169)
+impl WidgetPreview {
+    pub fn render(
+        &mut self,
+        ctx: &egui::Context,
+        options: WidgetOptions,
+        readings: Vec<WidgetReading>,
+        edge: bool,
+        expanded: bool,
+        taskbar_light: bool,
+    ) -> Option<&egui::TextureHandle> {
+        let scale = options.scale;
+        let cell = ((if edge { 56 } else { 57 }) * i32::from(scale) + 50) / 100;
+        let count = readings.len() as i32;
+        let mut layout = Layout {
+            x: 0,
+            y: 0,
+            w: cell * count,
+            h: 32,
+            dpi: 96,
+            light: taskbar_light,
+            cell,
+            scale,
+            options,
+            phase: false,
+            readings,
+            edge,
+            panel_width: cell,
+            reveal: 0,
+            progress: Vec::new(),
+        };
+        if edge {
+            layout.light = options.visual_theme.is_light(match options.theme {
+                Theme::System => taskbar_light,
+                Theme::Light => true,
+                Theme::Dark => false,
+            });
+            layout.w = if expanded { cell } else { 6 };
+            layout.h = if expanded { cell * count + 10 } else { 50 };
+            layout.reveal = if expanded { cell - 6 } else { 0 };
+            layout.progress = layout
+                .readings
+                .iter()
+                .map(|r| u16::from(r.level) * 10)
+                .collect();
+        }
+        if self
+            .0
+            .as_ref()
+            .is_none_or(|(previous, _)| previous != &layout)
+        {
+            let width = layout.w as usize;
+            let height = layout.h as usize;
+            let image = unsafe {
+                render_bitmap(&layout, |_, pixels| {
+                    let rgba: Vec<_> = pixels
+                        .iter()
+                        .flat_map(|pixel| {
+                            let [b, g, r, a] = pixel.to_le_bytes();
+                            [r, g, b, a]
+                        })
+                        .collect();
+                    egui::ColorImage::from_rgba_premultiplied([width, height], &rgba)
+                })
+            };
+            self.0 = image.map(|image| {
+                (
+                    layout,
+                    ctx.load_texture("widget-preview", image, egui::TextureOptions::LINEAR),
+                )
+            });
+        }
+        self.0.as_ref().map(|(_, texture)| texture)
+    }
+}
+
+fn reading_colour(layout: &Layout, palette: &Palette, reading: &WidgetReading) -> Rgb {
+    if reading.stale {
+        return palette.muted;
+    }
+    if reading.unavailable {
+        return match reading.coarse {
+            Some("Empty" | "Low") => palette.low,
+            Some("Medium") => palette.battery_level(60, reading.low_threshold),
+            Some("Full") => palette.full,
+            _ => palette.muted,
         };
     }
-    if reading.charging {
-        return if layout.light {
-            (135, 83, 0)
-        } else if layout.phase {
-            (255, 224, 146)
-        } else {
-            (242, 193, 78)
-        };
+    let base = palette.battery_colour(
+        reading.level,
+        reading.low_threshold,
+        reading.charging,
+        reading.full,
+    );
+    if !reading.charging || reading.full || !layout.phase {
+        return base;
     }
-    if reading.level <= reading.low_threshold {
-        return if layout.light {
-            (170, 25, 38)
-        } else {
-            (255, 130, 151)
-        };
-    }
-    if layout.edge && layout.options.accent == wireless_battery_monitor::preferences::Accent::System
-    {
-        (244, 193, 70)
-    } else {
-        layout.options.accent.rgb(layout.light)
-    }
+    let pulse = |channel: u8, text: u8| ((3 * u16::from(channel) + u16::from(text)) / 4) as u8;
+    (
+        pulse(base.0, palette.text.0),
+        pulse(base.1, palette.text.1),
+        pulse(base.2, palette.text.2),
+    )
 }
 
 /// Premultiplied BGRA for UpdateLayeredWindow, using a monochrome GDI text mask.
@@ -864,7 +1269,10 @@ fn blend_pixel(dst: u32, colour: Rgb, alpha: f32) -> u32 {
     let over = |value: u32, shift: u32| {
         ((value * a + ((dst >> shift) & 0xff) * inverse + 127) / 255) << shift
     };
-    over(255, 24) | over(colour.0, 16) | over(colour.1, 8) | over(colour.2, 0)
+    over(255, 24)
+        | over(u32::from(colour.0), 16)
+        | over(u32::from(colour.1), 8)
+        | over(u32::from(colour.2), 0)
 }
 
 fn rounded_rect_distance(x: f32, y: f32, half_width: f32, half_height: f32, radius: f32) -> f32 {
@@ -873,33 +1281,44 @@ fn rounded_rect_distance(x: f32, y: f32, half_width: f32, half_height: f32, radi
     dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0) - radius
 }
 
-fn edge_pixel(layout: &Layout, x: i32, y: i32, mask: f32) -> u32 {
+fn edge_pixel(layout: &Layout, palette: &Palette, x: i32, y: i32, mask: f32) -> u32 {
     use std::f32::consts::TAU;
 
     let scale = f32::from(layout.scale) / 100.0 * layout.dpi as f32 / 96.0;
+    let left = layout.options.edge_side == EdgeSide::Left;
     let x = x as f32 + 0.5;
     let py = y as f32 + 0.5;
     let half_h = layout.h as f32 / 2.0;
     if layout.reveal == 0 {
+        let x = if left { layout.w as f32 - x } else { x };
         let half_w = layout.w as f32 / 2.0;
         let dist =
             rounded_rect_distance(x - half_w - 1.0, py - half_h, half_w + 1.0, half_h, half_w);
-        return blend_pixel(0, (238, 181, 56), 0.90 * (0.5 - dist).clamp(0.0, 1.0));
+        let accent =
+            if layout.options.accent == wireless_battery_monitor::preferences::Accent::System {
+                palette.accent
+            } else {
+                layout.options.accent.rgb(layout.light)
+            };
+        return blend_pixel(0, accent, 0.90 * (0.5 - dist).clamp(0.0, 1.0));
     }
 
+    let x = if left {
+        x + (layout.panel_width - layout.w) as f32
+    } else {
+        x
+    };
     let half_w = layout.panel_width as f32 / 2.0;
     let dist = rounded_rect_distance(x - half_w, py - half_h, half_w, half_h, 10.0 * scale);
     let outer = (0.5 - dist).clamp(0.0, 1.0);
     if outer == 0.0 {
         return 0;
     }
-    let tint = (1.0 - x / layout.panel_width as f32).clamp(0.0, 1.0);
-    let body = 23 + (9.0 * tint) as u32;
-    let mut out = blend_pixel(0, (body + 2, body + 1, body), 0.96 * outer);
+    let mut out = blend_pixel(0, palette.surface, 0.98 * outer);
     out = blend_pixel(
         out,
-        (98, 91, 77),
-        0.35 * outer * (1.0 + dist).clamp(0.0, 1.0),
+        palette.border,
+        0.85 * outer * (1.0 + dist).clamp(0.0, 1.0),
     );
 
     let slot = (y / layout.cell) as usize;
@@ -911,16 +1330,32 @@ fn edge_pixel(layout: &Layout, x: i32, y: i32, mask: f32) -> u32 {
     let radius = 15.0 * scale;
     let radial_distance = (dx.hypot(dy) - radius).abs();
     let thickness = 1.55 * scale;
-    let base = reading_colour(layout, reading);
+    let base = reading_colour(layout, palette, reading);
     if radial_distance < thickness + 3.0 * scale {
         out = blend_pixel(
             out,
-            (67, 64, 62),
+            palette.border,
             (thickness + 0.5 - radial_distance).clamp(0.0, 1.0),
         );
+        let angle = dx.atan2(-dy).rem_euclid(TAU);
+        if let Some(level) = reading.coarse {
+            let filled_segments = match level {
+                "Empty" => 0,
+                "Low" => 1,
+                "Medium" => 2,
+                _ => 3,
+            };
+            let segment = angle * 3.0 / TAU;
+            if (segment as u8) < filled_segments && segment.fract() < 0.84 {
+                out = blend_pixel(
+                    out,
+                    base,
+                    (thickness + 0.5 - radial_distance).clamp(0.0, 1.0),
+                );
+            }
+        }
         let fraction = f32::from(layout.progress[slot]) / 1000.0;
         if fraction > 0.0 {
-            let angle = dx.atan2(-dy).rem_euclid(TAU);
             let sweep = TAU * fraction;
             let arc_distance = if angle <= sweep {
                 radial_distance
@@ -943,12 +1378,10 @@ fn edge_pixel(layout: &Layout, x: i32, y: i32, mask: f32) -> u32 {
             );
         }
     }
-    let label = if y % layout.cell >= (39.0 * scale).floor() as i32
-        && (reading.full || reading.level <= reading.low_threshold)
-    {
+    let label = if y % layout.cell >= (39.0 * scale).floor() as i32 {
         base
     } else {
-        (247, 245, 242)
+        reading.glyph.tint(layout.light)
     };
     blend_pixel(out, label, mask * outer)
 }
@@ -1021,6 +1454,49 @@ unsafe fn draw_glyph(
                 );
             }
         }
+        DeviceGlyph::Keyboard => {
+            let old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+            RoundRect(
+                dc,
+                left + s(1),
+                top + s(4),
+                left + s(18),
+                top + s(14),
+                s(4),
+                s(4),
+            );
+            for x in [4, 7, 10, 13] {
+                line(x, 7, x + 1, 7);
+            }
+            line(5, 10, 13, 10);
+            SelectObject(dc, old_brush);
+        }
+        DeviceGlyph::Gamepad => {
+            let old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+            let outline = [
+                (1, 14),
+                (3, 7),
+                (6, 4),
+                (12, 4),
+                (15, 7),
+                (17, 14),
+                (15, 15),
+                (11, 11),
+                (7, 11),
+                (3, 15),
+                (1, 14),
+            ]
+            .map(|(x, y)| POINT {
+                x: left + s(x),
+                y: top + s(y),
+            });
+            Polyline(dc, outline.as_ptr(), outline.len() as i32);
+            line(4, 8, 8, 8);
+            line(6, 6, 6, 10);
+            line(11, 7, 12, 7);
+            line(13, 9, 14, 9);
+            SelectObject(dc, old_brush);
+        }
         DeviceGlyph::Bluetooth => {
             line(9, 1, 9, 17);
             line(9, 1, 14, 5);
@@ -1061,16 +1537,16 @@ mod tests {
     }
 
     #[test]
-    fn normal_ring_has_a_warm_stroke() {
-        let pixel = edge_pixel(&example(50), 43, 24, 0.0);
+    fn medium_ring_uses_amber() {
+        let pixel = edge_pixel(&example(50), Palette::for_theme(false), 43, 24, 0.0);
         let red = (pixel >> 16) & 255;
         let blue = pixel & 255;
-        assert!(red > 100 && red > blue * 2);
+        assert!(red > 100 && red > blue);
     }
 
     #[test]
     fn zero_percent_retains_the_track_without_a_filled_arc() {
-        let pixel = edge_pixel(&example(0), 43, 24, 0.0);
+        let pixel = edge_pixel(&example(0), Palette::for_theme(false), 43, 24, 0.0);
         assert!(((pixel >> 16) & 255) < 100);
     }
 }

@@ -4,9 +4,8 @@ pub mod protocol;
 #[cfg(windows)]
 pub mod receiver;
 
-pub mod history;
-
 pub mod mouse;
+pub mod palette;
 
 pub mod preferences;
 
@@ -14,3 +13,11 @@ pub mod preferences;
 pub mod devices;
 
 pub mod diagnostics;
+
+#[cfg(any(windows, test))]
+mod usb_inventory;
+
+#[cfg(any(windows, test))]
+mod device_catalog;
+#[cfg(any(windows, test))]
+mod dualsense;

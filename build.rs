@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     let out = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR missing")?);
     let tree = usvg::Tree::from_str(include_str!("assets/icon.svg"), &usvg::Options::default())?;
-    let sizes = [16u32, 24, 32, 48, 64, 128, 256];
+    let sizes = [16u32, 20, 24, 32, 40, 48, 64, 128, 256];
     let mut images = Vec::new();
     for size in sizes {
         let mut pixmap = Pixmap::new(size, size).ok_or("icon allocation failed")?;
@@ -22,8 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         // PNG payloads are supported by modern Windows ICO files.
         images.push((size, pixmap.encode_png()?));
-        if size == 64 {
-            // egui expects straight-alpha RGBA, not tiny-skia's premultiplied pixels.
+        if matches!(size, 32 | 64) {
             let mut rgba = pixmap.data().to_vec();
             for pixel in rgba.chunks_exact_mut(4) {
                 let alpha = u32::from(pixel[3]);
@@ -33,7 +32,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            fs::write(out.join("app-icon.rgba"), rgba)?;
+            let name = if size == 32 {
+                "tray-icon.rgba"
+            } else {
+                "app-icon.rgba"
+            };
+            fs::write(out.join(name), rgba)?;
         }
     }
     let mut ico = vec![0, 0, 1, 0];
@@ -51,19 +55,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (_, png) in images {
         ico.extend_from_slice(&png);
     }
-    let icon_path = out.join("wireless-battery-monitor.ico");
+    let icon_path = out.join("GearDot.ico");
     fs::write(&icon_path, ico)?;
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let path = icon_path
             .to_str()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid icon path"))?;
         let version = format!("{}.{}", env!("CARGO_PKG_VERSION"), 0);
-        for (binary, description) in [
+        for (binary, filename, description) in [
             (
                 "wireless-battery-monitor",
-                "Wireless Peripheral Battery Monitor",
+                "GearDot.exe",
+                "GearDot Peripheral Battery Monitor",
             ),
-            ("diagnostic", "Wireless Battery Monitor Diagnostic"),
+            (
+                "diagnostic",
+                "diagnostic.exe",
+                "GearDot Battery Monitor Diagnostic",
+            ),
         ] {
             let resource_dir = out.join(format!("resource-{binary}"));
             fs::create_dir_all(&resource_dir)?;
@@ -73,11 +82,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             winresource::WindowsResource::new()
                 .set_output_directory(resource_dir)
                 .set_icon(path)
-                .set("ProductName", "Wireless Battery Monitor")
+                .set("ProductName", "GearDot")
                 .set("FileDescription", description)
                 .set("CompanyName", "Ahmed Gaber")
                 .set("LegalCopyright", "Copyright (c) 2026 Ahmed Gaber")
-                .set("OriginalFilename", &format!("{binary}.exe"))
+                .set("OriginalFilename", filename)
                 .set("InternalName", binary)
                 .set("FileVersion", &version)
                 .set("ProductVersion", &version)

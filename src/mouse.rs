@@ -86,7 +86,15 @@ impl crate::battery::BatterySource for MadRReceiver {
         for info in candidates {
             match info.open_device(&api) {
                 Ok(device) => match query(&device) {
-                    Ok(reading) => return Ok(reading),
+                    Ok(reading) => {
+                        use crate::battery::Connection;
+                        let connection = if info.product_id() == 0x103F {
+                            Connection::Wired
+                        } else {
+                            Connection::Dongle
+                        };
+                        return Ok(reading.with_connection(connection));
+                    }
                     Err(error) => last_error = error,
                 },
                 Err(error) => last_error = BatteryError::Io(error.to_string()),

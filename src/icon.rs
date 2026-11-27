@@ -1,27 +1,105 @@
 //! Compact battery gauge for the Windows notification area.
 use tray_icon::Icon;
+use wireless_battery_monitor::{battery::Connection, palette::Rgb, preferences::InputKind};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DeviceGlyph {
     Headset,
     Mouse,
     Earbuds,
+    Keyboard,
+    Gamepad,
     #[default]
     Bluetooth,
 }
 
 impl DeviceGlyph {
-    pub fn for_bluetooth(name: &str) -> Self {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Headset => "Headset",
+            Self::Mouse => "Mouse",
+            Self::Earbuds => "Earbuds",
+            Self::Keyboard => "Keyboard",
+            Self::Gamepad => "Controller",
+            Self::Bluetooth => "Device",
+        }
+    }
+
+    pub fn tint(self, light: bool) -> Rgb {
+        match (self, light) {
+            (Self::Mouse, true) => (37, 122, 30),
+            (Self::Mouse, false) => (105, 218, 88),
+            (Self::Headset | Self::Earbuds, true) => (172, 69, 12),
+            (Self::Headset | Self::Earbuds, false) => (255, 140, 64),
+            (Self::Gamepad, true) => (30, 87, 198),
+            (Self::Gamepad, false) => (93, 149, 255),
+            (Self::Keyboard, true) => (0, 108, 151),
+            (Self::Keyboard, false) => (62, 194, 244),
+            (Self::Bluetooth, true) => (111, 56, 187),
+            (Self::Bluetooth, false) => (187, 142, 249),
+        }
+    }
+
+    pub fn for_input(kind: InputKind) -> Self {
+        match kind {
+            InputKind::Headset => Self::Headset,
+            InputKind::Mouse => Self::Mouse,
+            InputKind::Keyboard => Self::Keyboard,
+            InputKind::Gamepad => Self::Gamepad,
+            InputKind::Other => Self::Bluetooth,
+        }
+    }
+
+    pub fn for_detected(name: &str, kind: InputKind, connection: Connection) -> Self {
+        if connection == Connection::Bluetooth {
+            Self::for_bluetooth(name, Some(kind))
+        } else {
+            Self::for_input(kind)
+        }
+    }
+
+    pub fn for_bluetooth(name: &str, kind: Option<InputKind>) -> Self {
         let name = name.to_ascii_lowercase();
-        if name.contains("mouse") || name.contains("cd23") {
-            Self::Mouse
-        } else if ["freearc", "freebuds", "k20i", "life p2 mini", "earbud"]
-            .iter()
-            .any(|model| name.contains(model))
+        if kind == Some(InputKind::Headset)
+            || (kind.is_none()
+                && [
+                    "freearc",
+                    "freebuds",
+                    "k20i",
+                    "life p2 mini",
+                    "earbud",
+                    "airpods",
+                    "galaxy buds",
+                ]
+                .iter()
+                .any(|model| name.contains(model)))
         {
             Self::Earbuds
+        } else if let Some(kind) = kind {
+            Self::for_input(kind)
+        } else if [
+            "keyboard", "keychron", "mx keys", "k380", "k480", "k580", "k780",
+        ]
+        .iter()
+        .any(|word| name.contains(word))
+        {
+            Self::Keyboard
+        } else if [
+            "controller",
+            "gamepad",
+            "dualsense",
+            "dualshock",
+            "8bitdo",
+            "joy-con",
+        ]
+        .iter()
+        .any(|word| name.contains(word))
+        {
+            Self::Gamepad
+        } else if name.contains("mouse") || name.contains("cd23") {
+            Self::Mouse
         } else if name.contains("headset") || name.contains("headphone") {
-            Self::Headset
+            Self::Earbuds
         } else {
             Self::Bluetooth
         }
@@ -31,44 +109,14 @@ impl DeviceGlyph {
 pub struct BatteryIcon;
 
 impl BatteryIcon {
-    pub fn render(level: Option<u8>) -> Result<Icon, Box<dyn std::error::Error>> {
-        Self::with_state(level, false, false)
-    }
-
-    pub fn with_state(
-        level: Option<u8>,
-        low: bool,
-        full: bool,
-    ) -> Result<Icon, Box<dyn std::error::Error>> {
-        let colour = if low {
-            [251, 104, 103, 255]
-        } else if full {
-            [75, 210, 154, 255]
-        } else {
-            [242, 193, 78, 255]
-        };
-        let mut rgba = vec![0; 32 * 32 * 4];
-        let mut pixel = |x: usize, y: usize, colour: [u8; 4]| {
-            let index = (y * 32 + x) * 4;
-            rgba[index..index + 4].copy_from_slice(&colour);
-        };
-        let fill = level.map_or(0, |value| (24 * usize::from(value.min(100))).div_ceil(100));
-        for y in 8_usize..24 {
-            for x in 1_usize..31 {
-                let dx = x.abs_diff(x.clamp(8_usize, 23));
-                let dy = y.abs_diff(15_usize).min(y.abs_diff(16_usize));
-                let radius = dx * dx + dy * dy;
-                if radius > 49 {
-                    continue;
+    pub fn render(status: Option<Rgb>) -> Result<Icon, Box<dyn std::error::Error>> {
+        let mut rgba = include_bytes!(concat!(env!("OUT_DIR"), "/tray-icon.rgba")).to_vec();
+        if let Some((r, g, b)) = status {
+            // The detached capsule lives in the upper-right corner of the mark.
+            for (index, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+                if index % 32 >= 22 && index / 32 < 12 && pixel[3] != 0 {
+                    pixel[..3].copy_from_slice(&[r, g, b]);
                 }
-                let shade = if radius > 33 || y == 8 || y == 23 {
-                    [133, 145, 153, 255]
-                } else if x < 4 + fill {
-                    colour
-                } else {
-                    [49, 60, 66, 255]
-                };
-                pixel(x, y, shade);
             }
         }
         Ok(Icon::from_rgba(rgba, 32, 32)?)

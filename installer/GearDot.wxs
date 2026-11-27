@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="GearDot" Language="1033" Version="$(var.Version)"
+           Manufacturer="Ahmed Gaber" UpgradeCode="82CA2FD7-A4D0-4832-A922-4233A2C5DB34">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of GearDot is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Icon Id="GearDotIcon" SourceFile="GearDot.ico" />
+    <Property Id="ARPPRODUCTICON" Value="GearDotIcon" />
+    <Condition Message="GearDot requires 64-bit Windows.">Installed OR VersionNT64</Condition>
+    <CustomAction Id="ClearLvlStartup" FileKey="MonitorExe" ExeCommand="--clear-installed-startup"
+                  Execute="immediate" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="ClearLvlStartup" Before="RemoveFiles">Installed AND REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+    </InstallExecuteSequence>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="GearDot">
+            <Component Id="Monitor" Guid="E3EFE11D-02A0-46DB-9E9B-D8BA41E60D2A" Win64="yes">
+              <File Id="MonitorExe" Name="GearDot.exe" Source="GearDot.exe" KeyPath="yes" />
+              <File Id="DiagnosticExe" Name="diagnostic.exe" Source="diagnostic.exe" />
+              <File Id="DriverProbe" Name="GearDot-DeviceProbe.exe" Source="GearDot-DeviceProbe.exe" />
+              <File Id="HeadsetControl" Name="HeadsetControl.exe" Source="HeadsetControl.exe" />
+              <File Id="ProjectLicense" Name="LICENSE" Source="LICENSE" />
+              <File Id="ThirdPartyNotices" Name="THIRD-PARTY-NOTICES.txt" Source="THIRD-PARTY-NOTICES.txt" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppMenu" Name="GearDot">
+          <Component Id="StartMenu" Guid="625010E6-BC51-4FF5-B87B-DFFA6AD1C397" Win64="yes">
+            <Shortcut Id="AppShortcut" Name="GearDot" Target="[INSTALLFOLDER]GearDot.exe" WorkingDirectory="INSTALLFOLDER" />
+            <RemoveFolder Id="RemoveAppMenu" On="uninstall" />
+            <RegistryValue Root="HKCU" Key="Software\GearDot" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+    <Feature Id="MainFeature" Title="GearDot" Level="1">
+      <ComponentRef Id="Monitor" />
+      <ComponentRef Id="StartMenu" />
+    </Feature>
+  </Product>
+</Wix>

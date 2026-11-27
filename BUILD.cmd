@@ -11,7 +11,13 @@ cargo test --locked --all-targets
 if errorlevel 1 goto failed
 cargo build --locked --release --bins
 if errorlevel 1 goto failed
-echo Build complete: target\release\wireless-battery-monitor.exe
+call vendor\wdbm-cpp\build.bat
+if errorlevel 1 goto failed
+copy /Y vendor\wdbm-cpp\BatteryHub.exe target\release\GearDot-DeviceProbe.exe >nul
+if errorlevel 1 goto failed
+powershell.exe -NoProfile -File installer\get-headsetcontrol.ps1
+if errorlevel 1 goto failed
+echo Build complete: target\release\wireless-battery-monitor.exe and GearDot-DeviceProbe.exe
 pause
 exit /b 0
 :failed

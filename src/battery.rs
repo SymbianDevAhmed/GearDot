@@ -1,5 +1,28 @@
 //! Domain model: no Windows, USB or user-interface dependencies.
+use serde::{Deserialize, Serialize};
 use std::fmt;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Connection {
+    Wired,
+    Usb,
+    Dongle,
+    Bluetooth,
+    #[default]
+    Unknown,
+}
+
+impl Connection {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Wired => "Wired",
+            Self::Usb => "USB",
+            Self::Dongle => "Dongle",
+            Self::Bluetooth => "Bluetooth",
+            Self::Unknown => "Connection unknown",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BatteryReading {
@@ -7,6 +30,7 @@ pub struct BatteryReading {
     percentage: u8,
     estimated: bool,
     charging: Option<bool>,
+    connection: Connection,
 }
 
 impl BatteryReading {
@@ -57,6 +81,7 @@ impl BatteryReading {
             percentage,
             estimated: true,
             charging: None,
+            connection: Connection::Unknown,
         })
     }
 
@@ -73,7 +98,17 @@ impl BatteryReading {
             percentage,
             estimated: false,
             charging: Some(charging),
+            connection: Connection::Unknown,
         })
+    }
+
+    pub fn with_connection(mut self, connection: Connection) -> Self {
+        self.connection = connection;
+        self
+    }
+
+    pub fn connection(self) -> Connection {
+        self.connection
     }
 
     pub fn estimated(self) -> bool {
@@ -121,6 +156,12 @@ pub enum DeviceKind {
     Mouse,
 }
 impl DeviceKind {
+    pub fn profile_id(self) -> &'static str {
+        match self {
+            Self::Headset => "usb:g435",
+            Self::Mouse => "usb:madr",
+        }
+    }
     pub const ALL: [Self; 2] = [Self::Headset, Self::Mouse];
     pub fn name(self) -> &'static str {
         match self {

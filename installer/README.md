@@ -9,3 +9,7 @@ The installer must be smoke-tested on Windows for install, upgrade, shortcut lau
 Official tool: [Inno Setup](https://jrsoftware.org/isinfo.php).
 
 Private packaging uploads both the Setup EXE and portable ZIP to GitHub Actions without creating a Release. The portable ZIP contains portable.flag and PORTABLE.txt (as README.txt); its writable data directory is created on first launch. Only an explicit release request publishes a Release.
+
+The packages include the bundled W.D.B.M and HeadsetControl executables.
+Run `installer/get-headsetcontrol.ps1` before packaging to obtain the pinned
+Windows helper and its corresponding source.

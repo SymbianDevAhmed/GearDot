@@ -1,7 +1,19 @@
 //! Persistent user preferences and platform-independent charging/alert policy.
-use crate::battery::{BatteryReading, DeviceKind};
+use crate::battery::{BatteryReading, Connection, DeviceKind};
+use crate::palette::{Palette, Rgb, VisualTheme};
 use serde::{Deserialize, Serialize};
-use std::{fs, io, path::PathBuf};
+use std::{
+    fs, io,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+pub fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Accent {
@@ -15,16 +27,15 @@ impl Accent {
     pub const ALL: [Self; 4] = [Self::System, Self::Mint, Self::Blue, Self::Violet];
     pub fn label(self) -> &'static str {
         match self {
-            Self::System => "System",
+            Self::System => "Match theme",
             Self::Mint => "Mint",
             Self::Blue => "Blue",
             Self::Violet => "Violet",
         }
     }
-    pub fn rgb(self, light: bool) -> (u32, u32, u32) {
+    pub fn rgb(self, light: bool) -> Rgb {
         match (self, light) {
-            (Self::System, true) => (32, 32, 32),
-            (Self::System, false) => (248, 248, 248),
+            (Self::System, _) => Palette::for_theme(light).accent,
             (Self::Mint, true) => (0, 106, 79),
             (Self::Mint, false) => (105, 222, 184),
             (Self::Blue, true) => (16, 82, 160),
@@ -53,6 +64,13 @@ impl Theme {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EdgeSide {
+    Left,
+    #[default]
+    Right,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WidgetOptions {
     pub visible: [bool; 2],
@@ -61,21 +79,16 @@ pub struct WidgetOptions {
     pub animate: bool,
     pub monitor_slot: u8,
     pub offset: u16,
-    pub power_saving: bool,
+    pub taskbar: bool,
     pub edge: bool,
+    pub edge_side: EdgeSide,
+    pub edge_height_percent: u8,
+    pub theme: Theme,
+    pub visual_theme: VisualTheme,
 }
 impl Default for WidgetOptions {
     fn default() -> Self {
-        Self {
-            visible: [true, true],
-            scale: 100,
-            accent: Accent::System,
-            animate: true,
-            monitor_slot: 0,
-            offset: 4,
-            power_saving: false,
-            edge: true,
-        }
+        Settings::default().widget_options()
     }
 }
 
@@ -109,6 +122,54 @@ impl DeviceProfile {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct DetectedProfile {
+    pub name: String,
+    pub visible: bool,
+}
+
+impl Default for DetectedProfile {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            visible: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DevicePlacement {
+    pub devices: bool,
+    pub taskbar: Option<bool>,
+    pub edge: Option<bool>,
+    pub pinned: bool,
+}
+
+impl Default for DevicePlacement {
+    fn default() -> Self {
+        Self {
+            devices: true,
+            taskbar: None,
+            edge: None,
+            pinned: false,
+        }
+    }
+}
+
+pub fn device_order(pinned: bool, low: bool, level: Option<u8>) -> (bool, bool, u8) {
+    (!pinned, !low, level.unwrap_or(u8::MAX))
+}
+
+/// Stable local key without writing the device path or Bluetooth address to disk.
+pub fn local_id(namespace: &str, bytes: &[u8]) -> String {
+    let hash = bytes.iter().fold(0xcbf29ce484222325u64, |value, byte| {
+        (value ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    });
+    format!("{namespace}{hash:016x}")
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub start_with_windows: bool,
     pub low_notifications: bool,
@@ -121,17 +182,26 @@ pub struct Settings {
     pub widget_accent: Accent,
     pub animate_charging: bool,
     pub theme: Theme,
-    pub chart_hours: u8,
+    pub visual_theme: VisualTheme,
     pub headset_name: String,
     pub mouse_name: String,
-    pub power_saving: bool,
     pub monitor_slot: u8,
     pub widget_offset: u16,
     pub notification_sound: bool,
+    pub battery_alerts_muted: bool,
+    pub taskbar_widget: bool,
+    pub tray_device: Option<String>,
     #[serde(rename = "edge_slider")]
     pub edge_widget: bool,
+    pub edge_side: EdgeSide,
+    pub edge_height_percent: u8,
     pub connection_alerts: bool,
     pub profiles: [DeviceProfile; 2],
+    pub detected_profiles: std::collections::BTreeMap<String, DetectedProfile>,
+    pub device_placements: std::collections::BTreeMap<String, DevicePlacement>,
+    pub devices_background: Option<String>,
+    pub background_opacity: u8,
+    pub theme_transparency: std::collections::BTreeMap<VisualTheme, u8>,
 }
 
 impl Default for Settings {
@@ -148,16 +218,25 @@ impl Default for Settings {
             widget_accent: Accent::System,
             animate_charging: true,
             theme: Theme::System,
-            chart_hours: 12,
+            visual_theme: VisualTheme::default(),
             headset_name: String::new(),
             mouse_name: String::new(),
-            power_saving: false,
             monitor_slot: 0,
             widget_offset: 4,
             notification_sound: true,
+            battery_alerts_muted: false,
+            taskbar_widget: true,
             edge_widget: true,
             connection_alerts: false,
+            tray_device: None,
+            edge_side: EdgeSide::Right,
+            edge_height_percent: 50,
             profiles: [DeviceProfile::default(); 2],
+            detected_profiles: Default::default(),
+            device_placements: Default::default(),
+            devices_background: None,
+            background_opacity: 45,
+            theme_transparency: Default::default(),
         }
     }
 }
@@ -167,14 +246,29 @@ impl Settings {
         self.low_threshold = self.low_threshold.clamp(5, 50);
         self.refresh_seconds = self.refresh_seconds.clamp(15, 300);
         self.widget_scale = self.widget_scale.clamp(80, 130);
-        if ![3, 6, 12, 24, 48].contains(&self.chart_hours) {
-            self.chart_hours = 12;
-        }
         self.headset_name = validated_name(&self.headset_name);
         self.mouse_name = validated_name(&self.mouse_name);
         self.monitor_slot = self.monitor_slot.min(8);
         self.widget_offset = self.widget_offset.min(240);
+        self.edge_height_percent = self.edge_height_percent.min(100);
+        self.tray_device = self
+            .tray_device
+            .filter(|id| !id.is_empty() && id.len() <= 64);
         self.profiles = self.profiles.map(DeviceProfile::validated);
+        self.background_opacity = self.background_opacity.min(100);
+        for value in self.theme_transparency.values_mut() {
+            *value = (*value).min(85);
+        }
+        self.devices_background = self
+            .devices_background
+            .filter(|id| id.len() == 16 && id.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        self.detected_profiles.retain(|id, profile| {
+            profile.name = validated_name(&profile.name);
+            !id.is_empty() && id.len() <= 64 && *profile != DetectedProfile::default()
+        });
+        self.device_placements.retain(|id, placement| {
+            !id.is_empty() && id.len() <= 64 && *placement != DevicePlacement::default()
+        });
         self
     }
     pub fn device_name(&self, kind: DeviceKind) -> &str {
@@ -186,6 +280,40 @@ impl Settings {
             kind.name()
         } else {
             custom
+        }
+    }
+    pub fn current_theme_transparency(&self) -> u8 {
+        self.theme_transparency
+            .get(&self.visual_theme)
+            .copied()
+            .unwrap_or(if self.visual_theme == VisualTheme::Glass {
+                70
+            } else {
+                0
+            })
+    }
+
+    pub fn detected_name<'a>(&'a self, id: &str, fallback: &'a str) -> &'a str {
+        self.detected_profiles
+            .get(id)
+            .map(|p| p.name.as_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(fallback)
+    }
+    pub fn detected_visible(&self, id: &str) -> bool {
+        self.detected_profiles
+            .get(id)
+            .is_none_or(|profile| profile.visible)
+    }
+    pub fn placement(&self, id: &str) -> DevicePlacement {
+        self.device_placements.get(id).copied().unwrap_or_default()
+    }
+
+    pub fn set_placement(&mut self, id: String, placement: DevicePlacement) {
+        if placement == DevicePlacement::default() {
+            self.device_placements.remove(&id);
+        } else {
+            self.device_placements.insert(id, placement);
         }
     }
     pub fn backup(&self) -> io::Result<()> {
@@ -212,37 +340,28 @@ impl Settings {
         }
     }
     pub fn poll_seconds(&self, kind: DeviceKind) -> u64 {
-        let base = self.profile(kind).refresh_seconds;
-        if self.power_saving {
-            base.max(120)
-        } else {
-            base
-        }
+        self.profile(kind).refresh_seconds
     }
     pub fn reconnect_seconds(&self) -> u64 {
-        if self.power_saving {
-            12
-        } else {
-            4
-        }
+        4
     }
     pub fn charge_seconds(&self) -> u64 {
-        if self.power_saving {
-            30
-        } else {
-            15
-        }
+        15
     }
     pub fn widget_options(&self) -> WidgetOptions {
         WidgetOptions {
             visible: [self.show_headset, self.show_mouse],
             scale: self.widget_scale,
             accent: self.widget_accent,
-            animate: self.animate_charging && !self.power_saving,
+            animate: self.animate_charging,
             monitor_slot: self.monitor_slot,
             offset: self.widget_offset,
-            power_saving: self.power_saving,
+            taskbar: self.taskbar_widget,
             edge: self.edge_widget,
+            edge_side: self.edge_side,
+            edge_height_percent: self.edge_height_percent,
+            theme: self.theme,
+            visual_theme: self.visual_theme,
         }
     }
     pub fn load() -> Self {
@@ -253,6 +372,20 @@ impl Settings {
     pub fn save(&self) -> io::Result<()> {
         write_json("settings.json", &self.clone().validated())
     }
+}
+
+pub fn tray_reading<'a, T>(
+    readings: &'a [T],
+    target: Option<&str>,
+    reading: impl Fn(&T) -> (&str, Option<u8>),
+) -> Option<&'a T> {
+    readings
+        .iter()
+        .filter(|item| reading(item).1.is_some())
+        .min_by_key(|item| {
+            let (id, level) = reading(item);
+            (target != Some(id), level)
+        })
 }
 
 fn validated_name(value: &str) -> String {
@@ -285,9 +418,56 @@ pub fn data_dir() -> io::Result<PathBuf> {
     if let Some(root) = portable_root() {
         return Ok(root.join("data"));
     }
+    local_data_dir()
+}
+
+fn local_data_dir() -> io::Result<PathBuf> {
     std::env::var_os("LOCALAPPDATA")
         .map(|p| PathBuf::from(p).join("G435Battery"))
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "LOCALAPPDATA unavailable"))
+}
+
+pub fn live_data_dir() -> io::Result<PathBuf> {
+    // Portable preferences travel with the app. Live observations belong to this PC.
+    Ok(local_data_dir()?.join("runtime"))
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TemporaryMute {
+    #[default]
+    Off,
+    Until(u64),
+    Session(String),
+}
+
+impl TemporaryMute {
+    pub fn active(&self, now: u64, session: &str) -> bool {
+        match self {
+            Self::Off => false,
+            Self::Until(until) => now < *until,
+            Self::Session(id) => !session.is_empty() && id == session,
+        }
+    }
+
+    pub fn load() -> Self {
+        read_live_json("temporary-mute.json").unwrap_or_default()
+    }
+
+    pub fn save(&self) -> io::Result<()> {
+        write_json_in(&live_data_dir()?, "temporary-mute.json", self)
+    }
+}
+
+fn read_live_json<T: serde::de::DeserializeOwned>(name: &str) -> io::Result<T> {
+    serde_json::from_slice(&fs::read(live_data_dir()?.join(name))?).map_err(io::Error::other)
+}
+
+pub fn new_monitor_session() -> String {
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{}-{started}", std::process::id())
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(name: &str) -> io::Result<T> {
@@ -295,8 +475,11 @@ fn read_json<T: serde::de::DeserializeOwned>(name: &str) -> io::Result<T> {
 }
 
 fn write_json<T: Serialize>(name: &str, value: &T) -> io::Result<()> {
-    let dir = data_dir()?;
-    fs::create_dir_all(&dir)?;
+    write_json_in(&data_dir()?, name, value)
+}
+
+fn write_json_in<T: Serialize>(dir: &std::path::Path, name: &str, value: &T) -> io::Result<()> {
+    fs::create_dir_all(dir)?;
     let destination = dir.join(name);
     let temporary = dir.join(format!("{name}.{}.tmp", std::process::id()));
     let result = (|| {
@@ -316,6 +499,8 @@ fn write_json<T: Serialize>(name: &str, value: &T) -> io::Result<()> {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LiveReading {
     pub checked_at: u64,
+    #[serde(default)]
+    pub connection: Connection,
     pub level: Option<u8>,
     pub millivolts: Option<u16>,
     pub charging: Option<bool>,
@@ -328,6 +513,7 @@ impl LiveReading {
     pub fn from_reading(reading: BatteryReading, now: u64) -> Self {
         Self {
             checked_at: now,
+            connection: reading.connection(),
             level: Some(reading.percentage()),
             millivolts: Some(reading.millivolts()),
             charging: reading.charging(),
@@ -363,12 +549,126 @@ impl LiveReading {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BluetoothReading {
+    #[serde(default)]
+    pub id: String,
     pub name: String,
+    pub percent: Option<u8>,
+    #[serde(default)]
+    pub kind: Option<InputKind>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InputKind {
+    Keyboard,
+    Gamepad,
+    Mouse,
+    Headset,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InputStatus {
+    Usb,
+    Receiver,
+    Wired,
+    WiredOnly,
+    Unknown,
+    Empty,
+    Low,
+    Medium,
+    Full,
+    Bluetooth,
+}
+
+impl InputStatus {
+    pub fn level_label(self) -> Option<&'static str> {
+        match self {
+            Self::Empty => Some("Empty"),
+            Self::Low => Some("Low"),
+            Self::Medium => Some("Medium"),
+            Self::Full => Some("Full"),
+            _ => None,
+        }
+    }
+
+    pub fn connection(self) -> Connection {
+        match self {
+            Self::Usb => Connection::Usb,
+            Self::Bluetooth => Connection::Bluetooth,
+            Self::Receiver => Connection::Dongle,
+            Self::Wired | Self::WiredOnly => Connection::Wired,
+            _ => Connection::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InputCharge {
+    Charging,
+    Discharging,
+    Full,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputBattery {
     pub percent: u8,
+    pub charge: InputCharge,
+    pub estimated: bool,
+    pub checked_at: u64,
+    #[serde(default)]
+    pub stale: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputPeripheral {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    pub kind: InputKind,
+    pub status: InputStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_override: Option<Connection>,
+    #[serde(default)]
+    pub usb_ids: Option<(u16, u16)>,
+    #[serde(default)]
+    pub battery: Option<InputBattery>,
+}
+
+impl BluetoothReading {
+    pub fn profile_id(&self) -> std::borrow::Cow<'_, str> {
+        if self.id.is_empty() {
+            local_id("bt-name-", self.name.as_bytes()).into()
+        } else {
+            self.id.as_str().into()
+        }
+    }
+}
+
+impl InputPeripheral {
+    pub fn connection(&self) -> Connection {
+        self.connection_override
+            .unwrap_or_else(|| self.status.connection())
+    }
+
+    pub fn profile_id(&self) -> std::borrow::Cow<'_, str> {
+        if self.id.is_empty() {
+            local_id("input-name-", self.name.as_bytes()).into()
+        } else {
+            self.id.as_str().into()
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedPhoneBattery {
+    pub percent: u8,
+    pub charging: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LiveSnapshot {
+    #[serde(default)]
+    pub monitor_session: String,
     pub devices: [LiveReading; 2],
     pub refresh_seconds: u64,
     #[serde(default)]
@@ -377,18 +677,70 @@ pub struct LiveSnapshot {
     pub bluetooth: Vec<BluetoothReading>,
     #[serde(default)]
     pub bluetooth_checked_at: u64,
+    #[serde(default)]
+    pub bluetooth_error: Option<String>,
+    #[serde(default)]
+    pub input_peripherals: Vec<InputPeripheral>,
+    #[serde(default)]
+    pub inputs_checked_at: u64,
+    #[serde(default)]
+    pub cached_phone: Option<CachedPhoneBattery>,
+    #[serde(default)]
+    pub inputs_hid_error: Option<String>,
+    #[serde(default)]
+    pub audio_error: Option<String>,
+}
+
+pub fn normalized_device_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 impl LiveSnapshot {
     pub fn load() -> Self {
-        read_json("live-status.json").unwrap_or_default()
+        read_live_json("live-status.json").unwrap_or_default()
     }
     pub fn save(&self) -> io::Result<()> {
-        write_json("live-status.json", self)
+        write_json_in(&live_data_dir()?, "live-status.json", self)
     }
-    pub fn connected_bluetooth(&self, now: u64) -> &[BluetoothReading] {
-        if self.bluetooth_checked_at != 0 && now.saturating_sub(self.bluetooth_checked_at) <= 45 {
-            &self.bluetooth
+    pub fn connected_bluetooth(&self, now: u64) -> impl Iterator<Item = &BluetoothReading> {
+        let active =
+            self.bluetooth_checked_at != 0 && now.saturating_sub(self.bluetooth_checked_at) <= 45;
+        let inputs = self.connected_inputs(now);
+        self.bluetooth.iter().filter(move |reading| {
+            if !active {
+                return false;
+            }
+            let name = normalized_device_name(&reading.name);
+            if name.is_empty()
+                || self
+                    .bluetooth
+                    .iter()
+                    .filter(|candidate| normalized_device_name(&candidate.name) == name)
+                    .take(2)
+                    .count()
+                    != 1
+            {
+                return true;
+            }
+            inputs
+                .iter()
+                .filter(|device| {
+                    device.connection() == Connection::Bluetooth
+                        && device.battery.is_some()
+                        && normalized_device_name(&device.name) == name
+                        && reading.kind.is_none_or(|kind| kind == device.kind)
+                })
+                .take(2)
+                .count()
+                != 1
+        })
+    }
+    pub fn connected_inputs(&self, now: u64) -> &[InputPeripheral] {
+        if self.inputs_checked_at != 0 && now.saturating_sub(self.inputs_checked_at) <= 90 {
+            &self.input_peripherals
         } else {
             &[]
         }
@@ -435,8 +787,21 @@ impl AlertTracker {
         reading: BatteryReading,
         profile: DeviceProfile,
     ) -> Option<Alert> {
-        let level = reading.percentage();
-        let charging = reading.charging();
+        self.observe_telemetry(
+            reading.percentage(),
+            reading.charging(),
+            reading.estimated(),
+            profile,
+        )
+    }
+
+    pub fn observe_telemetry(
+        &mut self,
+        level: u8,
+        charging: Option<bool>,
+        estimated: bool,
+        profile: DeviceProfile,
+    ) -> Option<Alert> {
         if level >= profile.low_threshold.saturating_add(5) || charging == Some(true) {
             self.low_alerted = false;
         }
@@ -447,7 +812,7 @@ impl AlertTracker {
             self.charge_seen = true;
         }
         // A device can stop reporting charging at precisely 100%.
-        if !reading.estimated() && level == 100 && self.charge_seen && !self.full_alerted {
+        if !estimated && level == 100 && self.charge_seen && !self.full_alerted {
             self.full_alerted = true;
             self.charge_seen = false;
             if profile.full_notifications {
@@ -467,6 +832,17 @@ impl AlertTracker {
         }
         None
     }
+    pub fn observe_coarse(&mut self, status: InputStatus, profile: DeviceProfile) -> Option<Alert> {
+        match status {
+            InputStatus::Empty | InputStatus::Low => self.observe_telemetry(0, None, true, profile),
+            InputStatus::Medium | InputStatus::Full => {
+                self.low_alerted = false;
+                None
+            }
+            _ => None,
+        }
+    }
+
     pub fn disconnected(&mut self) {
         self.charge_seen = false;
     }
@@ -478,6 +854,132 @@ mod tests {
     fn mouse(level: u8, charging: bool) -> BatteryReading {
         BatteryReading::from_reported(3900, level, charging).unwrap()
     }
+
+    #[test]
+    fn tray_selection_falls_back_to_a_reported_level_and_remembers_the_target() {
+        let readings = [
+            ("mouse", Some(70)),
+            ("keyboard", None),
+            ("headset", Some(0)),
+        ];
+        let lookup = |target| tray_reading(&readings, target, |r| *r).copied();
+        assert_eq!(lookup(None), Some(("headset", Some(0))));
+        assert_eq!(lookup(Some("mouse")), Some(("mouse", Some(70))));
+        assert_eq!(lookup(Some("keyboard")), lookup(None));
+        assert_eq!(lookup(Some("disconnected")), lookup(None));
+        let settings = Settings {
+            tray_device: Some("disconnected".into()),
+            ..Default::default()
+        };
+        let roundtrip: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(roundtrip.validated().tray_device, settings.tray_device);
+    }
+
+    #[test]
+    fn placement_round_trips_and_pinned_devices_precede_low_batteries() {
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        let id = DeviceKind::Mouse.profile_id();
+        assert_eq!(settings.placement(id), DevicePlacement::default());
+        let placement = DevicePlacement {
+            devices: false,
+            taskbar: Some(true),
+            edge: Some(false),
+            pinned: true,
+        };
+        settings.set_placement(id.into(), placement);
+        let restored: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(restored.placement(id), placement);
+        assert!(device_order(true, false, Some(90)) < device_order(false, true, Some(5)));
+        assert!(device_order(false, true, Some(12)) < device_order(false, false, Some(6)));
+        assert!(device_order(false, false, Some(90)) < device_order(false, false, None));
+    }
+
+    #[test]
+    fn temporary_mute_expires_at_its_deadline_or_when_the_monitor_restarts() {
+        assert!(TemporaryMute::Until(3600).active(3599, "next-session"));
+        assert!(!TemporaryMute::Until(3600).active(3600, "next-session"));
+        let mute = TemporaryMute::Session("active-session".into());
+        assert!(mute.active(0, "active-session"));
+        assert!(!mute.active(0, "next-session"));
+        assert!(!mute.active(0, ""));
+        assert!(!TemporaryMute::Off.active(0, "active-session"));
+    }
+
+    #[test]
+    fn quick_controls_preserve_old_defaults_and_independent_choices() {
+        let mut settings: Settings = serde_json::from_str(r#"{"edge_slider":false}"#).unwrap();
+        assert!(settings.widget_options().taskbar);
+        assert!(!settings.widget_options().edge);
+        assert!(!settings.battery_alerts_muted);
+
+        settings.taskbar_widget = false;
+        settings.edge_widget = true;
+        settings.battery_alerts_muted = true;
+        settings.profiles[DeviceKind::Mouse.index()].custom = true;
+        let restored: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert!(!restored.widget_options().taskbar);
+        assert!(restored.widget_options().edge);
+        assert!(restored.battery_alerts_muted);
+        assert!(restored.profile(DeviceKind::Mouse).low_notifications);
+    }
+    #[test]
+    fn transparency_is_independent_for_each_theme_and_the_background_image() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.current_theme_transparency(), 0);
+        settings.theme_transparency.insert(VisualTheme::Ion, 30);
+        settings.theme_transparency.insert(VisualTheme::Arctic, 100);
+        settings.visual_theme = VisualTheme::Glass;
+        assert_eq!(settings.current_theme_transparency(), 70);
+        settings.visual_theme = VisualTheme::Arctic;
+        let roundtrip: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        let mut roundtrip = roundtrip.validated();
+        assert_eq!(roundtrip.current_theme_transparency(), 85);
+        roundtrip.visual_theme = VisualTheme::Ion;
+        assert_eq!(roundtrip.current_theme_transparency(), 30);
+        assert_eq!(roundtrip.background_opacity, 45);
+    }
+
+    #[test]
+    fn obsidian_is_the_default_and_saved_themes_keep_their_value() {
+        assert_eq!(Settings::default().visual_theme, VisualTheme::Obsidian);
+        let missing: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.visual_theme, VisualTheme::Obsidian);
+        let saved: Settings = serde_json::from_str(r#"{"visual_theme":"Ion"}"#).unwrap();
+        assert_eq!(saved.validated().visual_theme, VisualTheme::Ion);
+    }
+
+    #[test]
+    fn detected_profile_and_background_are_local_persistent_settings() {
+        let mut saved: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(saved.background_opacity, 45);
+        assert!(saved.devices_background.is_none());
+        assert!(saved.detected_visible("hid-example"));
+
+        saved.detected_profiles.insert(
+            "hid-example".into(),
+            DetectedProfile {
+                name: "  Work keyboard  ".into(),
+                visible: false,
+            },
+        );
+        saved.devices_background = Some("12ab34cd56ef1234".into());
+        saved.background_opacity = 170;
+        let saved = saved.validated();
+        let restored: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
+        assert_eq!(restored, saved);
+        assert_eq!(restored.background_opacity, 100);
+        assert!(!restored.detected_visible("hid-example"));
+        assert_eq!(
+            restored.detected_name("hid-example", "Keyboard"),
+            "Work keyboard"
+        );
+    }
+
     #[test]
     fn preferences_are_bounded_and_default_to_opt_in_startup() {
         let s = Settings {
@@ -531,6 +1033,9 @@ mod tests {
         let settings = Settings {
             refresh_seconds: 30,
             low_threshold: 15,
+            edge_widget: false,
+            edge_side: EdgeSide::Left,
+            edge_height_percent: 25,
             ..Default::default()
         };
         assert_eq!(
@@ -542,25 +1047,26 @@ mod tests {
         assert!(!partial.start_with_windows);
         assert_eq!(partial.widget_options(), WidgetOptions::default());
         assert_eq!(partial.theme, Theme::System);
-        assert_eq!(partial.chart_hours, 12);
         assert_eq!(partial.refresh_seconds, 30);
     }
     #[test]
     fn appearance_preferences_are_bounded() {
         let s = Settings {
             widget_scale: 250,
-            chart_hours: 13,
             show_headset: false,
             widget_accent: Accent::Violet,
             theme: Theme::Light,
+            edge_side: EdgeSide::Left,
+            edge_height_percent: 255,
             ..Default::default()
         }
         .validated();
         assert_eq!(s.widget_scale, 130);
-        assert_eq!(s.chart_hours, 12);
         assert_eq!(s.widget_options().visible, [false, true]);
         assert_eq!(s.widget_options().accent, Accent::Violet);
         assert_eq!(s.theme, Theme::Light);
+        assert_eq!(s.widget_options().edge_side, EdgeSide::Left);
+        assert_eq!(s.widget_options().edge_height_percent, 100);
     }
     #[test]
     fn custom_device_names_do_not_change_device_identity() {
@@ -587,9 +1093,23 @@ mod tests {
         assert!(!snapshot.reading(DeviceKind::Mouse, 200).stale);
     }
     #[test]
-    fn per_device_profiles_and_saver_are_independent() {
+    fn settings_from_older_versions_ignore_removed_power_saving_mode() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"power_saving":true,"refresh_seconds":45,"animate_charging":true}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.poll_seconds(DeviceKind::Mouse), 45);
+        assert!(settings.widget_options().animate);
+        assert!(serde_json::to_value(settings)
+            .unwrap()
+            .get("power_saving")
+            .is_none());
+    }
+
+    #[test]
+    fn per_device_profiles_keep_their_refresh_intervals() {
         let s = Settings {
-            power_saving: true,
+            animate_charging: true,
             profiles: [
                 DeviceProfile {
                     custom: true,
@@ -604,10 +1124,10 @@ mod tests {
         .validated();
         assert_eq!(s.profile(DeviceKind::Headset).low_threshold, 35);
         assert_eq!(s.profile(DeviceKind::Mouse).low_threshold, 20);
-        assert_eq!(s.poll_seconds(DeviceKind::Headset), 120);
-        assert_eq!(s.reconnect_seconds(), 12);
-        assert_eq!(s.charge_seconds(), 30);
-        assert!(!s.widget_options().animate);
+        assert_eq!(s.poll_seconds(DeviceKind::Headset), 30);
+        assert_eq!(s.reconnect_seconds(), 4);
+        assert_eq!(s.charge_seconds(), 15);
+        assert!(s.widget_options().animate);
         let mut tracker = AlertTracker::default();
         assert_eq!(
             tracker.observe_profile(mouse(30, false), s.profile(DeviceKind::Headset)),
