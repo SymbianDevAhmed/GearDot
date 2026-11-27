@@ -126,6 +126,35 @@ Choose one installer. For Portable, keep `portable.flag`, `GearDot-DeviceProbe.e
 
 ---
 
+## ⚙️ App Options
+
+### Controls and Diagnostics
+
+| Option | What it does |
+|---|---|
+| **Taskbar indicator** | Show or hide battery readings alongside the Windows taskbar. |
+| **Screen-edge battery slider** | Show or hide the battery rings on the edge of the screen. |
+| **Mute battery and connection alerts** | Keep alerts muted until you turn this option off. |
+| **Temporary mute** | Mute alerts for one hour or until GearDot exits. Use **End temporary mute** to resume sooner. |
+| **Diagnostics** | Rescan devices or copy a report with detected devices, connection types, and available readings. |
+
+Changes on **Controls** apply immediately. On the **Settings** page, select **Save settings** to apply your changes.
+
+### Settings
+
+| Section | Available options |
+|---|---|
+| **Appearance** | Choose a theme, change its transparency, and set a custom Devices background with adjustable opacity. Ion and Glass also have a System, Light, or Dark mode. |
+| **General** | Set the default refresh interval from 15 to 300 seconds. **Start with Windows** is available in the installed edition. |
+| **Device profiles** | Rename or hide a device, pin it to the top, and choose whether it appears in Devices, on the taskbar, or in the edge slider. The built-in G435 and MAD R profiles also support custom polling and low-battery settings. The MAD R profile adds a full-charge alert. |
+| **Slider and taskbar** | Choose whether the tray icon tracks the lowest available battery or a specific device. Adjust widget size, monitor, taskbar offset, charging animation, and the edge slider's accent, side, and vertical position. |
+| **Notifications** | Enable low-battery, full-charge, or reconnection alerts. Set the low-battery threshold from 5% to 50%, toggle sound, and send a test notification. Charging-related alerts depend on the device's available readings. |
+| **Backup and diagnostics** | Export saved settings, load a backup, reset to defaults, or open the data and logs folder. Select **Save settings** after loading a backup or resetting. |
+
+Right-click the **GearDot** notification area icon to refresh readings, open **Battery details** or **Settings**, or exit the app.
+
+---
+
 ## 📊 Resource Usage
 
 | Release package | Download size |
