@@ -1,0 +1,59 @@
+name: Measure Windows resource usage
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release or draft tag whose Portable ZIP should be measured
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: windows-latest
+    timeout-minutes: 6
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Measure the portable monitor with its device window closed
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = New-Item (Join-Path $env:RUNNER_TEMP 'geardot-benchmark') -ItemType Directory
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern GearDot-Portable.zip --pattern SHA256SUMS.txt --dir $folder
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $zip = Join-Path $folder GearDot-Portable.zip
+          $manifest = Get-Content (Join-Path $folder SHA256SUMS.txt)
+          $expected = ($manifest | Where-Object { $_ -match '  GearDot-Portable\.zip$' }) -split '\s+'
+          if (!$expected -or $expected[0] -ne (Get-FileHash $zip -Algorithm SHA256).Hash) { throw 'Portable checksum mismatch.' }
+          $app = Join-Path $folder app
+          Expand-Archive $zip $app
+          $monitor = Start-Process (Join-Path $app GearDot.exe) -ArgumentList '--background' -PassThru
+          try {
+            Start-Sleep -Seconds 10
+            $monitor.Refresh()
+            if ($monitor.HasExited) { throw 'Monitor exited at startup.' }
+            $cpuStart = $monitor.TotalProcessorTime.TotalSeconds
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            $memory = @()
+            $helpers = 0
+            while ($clock.Elapsed.TotalSeconds -lt 30) {
+              $monitor.Refresh()
+              if ($monitor.HasExited) { throw 'Monitor exited during measurement.' }
+              $memory += $monitor.WorkingSet64 / 1MB
+              $helpers += @(Get-Process -Name 'GearDot-DeviceProbe','HeadsetControl' -ErrorAction SilentlyContinue).Count
+              Start-Sleep -Milliseconds 500
+            }
+            $monitor.Refresh()
+            $cpu = 100 * ($monitor.TotalProcessorTime.TotalSeconds - $cpuStart) / $clock.Elapsed.TotalSeconds / [Environment]::ProcessorCount
+            $stats = $memory | Measure-Object -Average -Maximum
+            $benchmark = ('RESULT average_RAM_MiB={0:F1} peak_RAM_MiB={1:F1} average_CPU_percent={2:F2} logical_cpus={3} samples={4} helper_observations={5} windows_build={6}' -f $stats.Average,$stats.Maximum,$cpu,[Environment]::ProcessorCount,$stats.Count,$helpers,[Environment]::OSVersion.Version.Build)
+            Write-Host $benchmark
+            $benchmark >> $env:GITHUB_STEP_SUMMARY
+          } finally {
+            if (!$monitor.HasExited) { Stop-Process -Id $monitor.Id }
+          }
