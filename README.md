@@ -136,7 +136,13 @@ Choose one installer. For Portable, keep `portable.flag`, `GearDot-DeviceProbe.e
 
 GearDot runs in the notification area and launches the bundled readers when it scans devices. Memory and CPU use depend on the number of connected devices, refresh settings, and whether the device window is open.
 
-The [Windows measurement workflow](.github/workflows/benchmark.yml) samples the released Portable build with the device window closed. It reports the GearDot process working set and CPU average separately from package size.
+| Portable monitor benchmark | Measured value |
+|---|---:|
+| Average RAM (working set) | 17.1 MiB |
+| Peak sampled RAM | 17.2 MiB |
+| Average CPU across both logical CPUs | 0.13% |
+
+Measured on a GitHub-hosted Windows Server 2025 runner with two logical CPUs. The run used the released Portable binary, with the device window closed and no test peripherals attached. It took 59 samples over 30 seconds after a 10-second warm-up. The values cover the GearDot monitor process. Separate device probe processes and the open device window have their own resource use. [Measurement run](https://github.com/SymbianDevAhmed/GearDot/actions/runs/45995402583) · [Measurement workflow](.github/workflows/benchmark.yml)
 
 ---
 
