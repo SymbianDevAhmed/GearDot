@@ -41,6 +41,7 @@
               <File Id="HeadsetControl" Name="HeadsetControl.exe" Source="HeadsetControl.exe" />
               <File Id="ProjectLicense" Name="LICENSE" Source="LICENSE" />
               <File Id="ThirdPartyNotices" Name="THIRD-PARTY-NOTICES.txt" Source="THIRD-PARTY-NOTICES.txt" />
+              <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
               <RegistryValue Root="HKCU" Key="Software\GearDot" Name="InstallFolder"
                              Value="[INSTALLFOLDER]" Type="string" />
             </Component>

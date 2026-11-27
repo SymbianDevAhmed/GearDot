@@ -140,7 +140,8 @@ jobs:
           try {
             & (Join-Path $wix candle.exe) -arch x64 "-dVersion=$env:VERSION" GearDot.wxs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & (Join-Path $wix light.exe) -sice:ICE38 -sice:ICE91 -out GearDot-Setup-x64.msi GearDot.wixobj
+            # The shared LocalAppData\Programs parent is intentionally retained after uninstall.
+            & (Join-Path $wix light.exe) -sice:ICE38 -sice:ICE64 -sice:ICE91 -out GearDot-Setup-x64.msi GearDot.wixobj
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             python $wizard GearDot-Setup-x64.msi
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
